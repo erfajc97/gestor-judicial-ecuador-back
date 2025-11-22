@@ -1,0 +1,5 @@
+# Prisma configuration
+# This file is for IDE/linter compatibility
+# Prisma 6 reads DATABASE_URL from schema.prisma
+# Prisma 7 would use prisma.config.ts
+

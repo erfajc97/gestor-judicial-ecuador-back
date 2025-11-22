@@ -1,0 +1,97 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TipoParticipante {
+  JUEZ
+  ABOGADO_DEMANDANTE
+  ABOGADO_DEFENSOR
+  ACUSADO
+  PERITO
+}
+
+enum EstadoJuicio {
+  PROGRAMADO
+  EN_CURSO
+  COMPLETADO
+  CANCELADO
+  REAGENDADO
+}
+
+enum TipoNotificacion {
+  CREACION
+  ACTUALIZACION
+  RECORDATORIO_24H
+  RECORDATORIO_1H
+  CANCELACION
+}
+
+model Juicio {
+  id          String       @id @default(uuid())
+  numeroCaso  String       @unique
+  tipoJuicio  String
+  fecha       DateTime
+  hora        String
+  sala        String
+  descripcion String?
+  estado      EstadoJuicio @default(PROGRAMADO)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  participantes  JuicioParticipante[]
+  notificaciones Notificacion[]
+
+  @@map("juicios")
+}
+
+model Participante {
+  id             String           @id @default(uuid())
+  nombre         String
+  email          String?
+  telefono       String?
+  tipo           TipoParticipante
+  telegramChatId String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  juicios        JuicioParticipante[]
+  notificaciones Notificacion[]
+
+  @@map("participantes")
+}
+
+model JuicioParticipante {
+  id             String   @id @default(uuid())
+  juicioId       String
+  participanteId String
+  rol            String?
+  createdAt      DateTime @default(now())
+
+  juicio       Juicio       @relation(fields: [juicioId], references: [id], onDelete: Cascade)
+  participante Participante @relation(fields: [participanteId], references: [id], onDelete: Cascade)
+
+  @@unique([juicioId, participanteId])
+  @@map("juicio_participantes")
+}
+
+model Notificacion {
+  id             String           @id @default(uuid())
+  juicioId       String
+  participanteId String?
+  tipo           TipoNotificacion
+  mensaje        String
+  enviada        Boolean          @default(false)
+  fechaEnvio     DateTime?
+  createdAt      DateTime         @default(now())
+
+  juicio       Juicio        @relation(fields: [juicioId], references: [id], onDelete: Cascade)
+  participante Participante? @relation(fields: [participanteId], references: [id], onDelete: SetNull)
+
+  @@map("notificaciones")
+}
