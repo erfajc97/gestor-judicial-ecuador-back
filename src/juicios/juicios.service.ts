@@ -16,32 +16,82 @@ export class JuiciosService {
     const { participantes, ...juicioData } = createJuicioDto;
 
     try {
+      console.log(
+        '📝 Creando juicio con datos:',
+        JSON.stringify(createJuicioDto, null, 2),
+      );
+
       // Validar que los participantes existan antes de crear el juicio
       if (participantes && participantes.length > 0) {
+        console.log(`🔍 Validando ${participantes.length} participante(s)...`);
         for (const p of participantes) {
+          if (!p.participanteId || p.participanteId.trim() === '') {
+            throw new NotFoundException(
+              'El ID del participante no puede estar vacío',
+            );
+          }
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
           const participante =
             // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
             await (this.prisma as any).participante.findUnique({
-              where: { id: p.participanteId },
+              where: { id: p.participanteId.trim() },
             });
           if (!participante) {
+            console.error(
+              `❌ Participante con ID "${p.participanteId}" no encontrado`,
+            );
             throw new NotFoundException(
-              `Participante con ID ${p.participanteId} no encontrado`,
+              `Participante con ID "${p.participanteId}" no encontrado`,
             );
           }
+          console.log(`✅ Participante "${p.participanteId}" encontrado`);
         }
       }
+
+      // Validar formato de fecha
+      if (!juicioData.fecha || typeof juicioData.fecha !== 'string') {
+        throw new Error('La fecha es requerida y debe ser una cadena de texto');
+      }
+
+      // Validar que la fecha esté en formato ISO (YYYY-MM-DD)
+      const fechaRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!fechaRegex.test(juicioData.fecha)) {
+        console.error(`❌ Formato de fecha inválido: "${juicioData.fecha}"`);
+        throw new Error(
+          `Formato de fecha inválido: "${juicioData.fecha}". Debe ser YYYY-MM-DD`,
+        );
+      }
+
+      // Convertir fecha y hora a DateTime para Prisma
+      // Combinar fecha (YYYY-MM-DD) con hora (HH:MM) para crear un DateTime completo
+      const fechaHoraCompleta = `${juicioData.fecha}T${juicioData.hora}:00`;
+      const fechaDateTime = new Date(fechaHoraCompleta);
+
+      // Validar que la fecha sea válida
+      if (isNaN(fechaDateTime.getTime())) {
+        console.error(
+          `❌ Fecha y hora inválidas: "${juicioData.fecha}" "${juicioData.hora}"`,
+        );
+        throw new Error(
+          `Fecha y hora inválidas: "${juicioData.fecha}" "${juicioData.hora}"`,
+        );
+      }
+
+      console.log(
+        '✅ Validaciones pasadas. Creando juicio en la base de datos...',
+      );
+      console.log(`📅 Fecha DateTime: ${fechaDateTime.toISOString()}`);
 
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
       const juicio = await (this.prisma as any).juicio.create({
         data: {
           ...juicioData,
+          fecha: fechaDateTime, // Usar el DateTime completo en lugar de solo la fecha
           participantes: participantes
             ? {
                 create: participantes.map((p) => ({
-                  participanteId: p.participanteId,
-                  rol: p.rol,
+                  participanteId: p.participanteId.trim(),
+                  rol: p.rol?.trim() || undefined,
                 })),
               }
             : undefined,
@@ -55,20 +105,32 @@ export class JuiciosService {
         },
       });
 
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      console.log('✅ Juicio creado exitosamente:', juicio.id);
+
       // Enviar notificaciones
       if (participantes && participantes.length > 0) {
         this.notificacionesService
           // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
           .notificarCreacionJuicio(juicio.id)
           .catch((error) => {
-            console.error('Error enviando notificaciones:', error);
+            console.error('⚠️ Error enviando notificaciones:', error);
           });
       }
 
       // eslint-disable-next-line @typescript-eslint/no-unsafe-return
       return juicio;
     } catch (error) {
-      console.error('Error creando juicio:', error);
+      console.error('❌ Error creando juicio:', error);
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      // Si es un error de Prisma, extraer el mensaje
+      if (error && typeof error === 'object' && 'message' in error) {
+        const errorMessage = (error as { message: string }).message;
+        console.error('📋 Mensaje de error:', errorMessage);
+        throw new Error(`Error al crear el juicio: ${errorMessage}`);
+      }
       throw error;
     }
   }
