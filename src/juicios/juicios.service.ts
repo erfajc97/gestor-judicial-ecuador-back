@@ -15,40 +15,62 @@ export class JuiciosService {
   async create(createJuicioDto: CreateJuicioDto) {
     const { participantes, ...juicioData } = createJuicioDto;
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-    const juicio = await (this.prisma as any).juicio.create({
-      data: {
-        ...juicioData,
-        participantes: participantes
-          ? {
-              create: participantes.map((p) => ({
-                participanteId: p.participanteId,
-                rol: p.rol,
-              })),
-            }
-          : undefined,
-      },
-      include: {
-        participantes: {
-          include: {
-            participante: true,
+    try {
+      // Validar que los participantes existan antes de crear el juicio
+      if (participantes && participantes.length > 0) {
+        for (const p of participantes) {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+          const participante =
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+            await (this.prisma as any).participante.findUnique({
+              where: { id: p.participanteId },
+            });
+          if (!participante) {
+            throw new NotFoundException(
+              `Participante con ID ${p.participanteId} no encontrado`,
+            );
+          }
+        }
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      const juicio = await (this.prisma as any).juicio.create({
+        data: {
+          ...juicioData,
+          participantes: participantes
+            ? {
+                create: participantes.map((p) => ({
+                  participanteId: p.participanteId,
+                  rol: p.rol,
+                })),
+              }
+            : undefined,
+        },
+        include: {
+          participantes: {
+            include: {
+              participante: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    // Enviar notificaciones
-    if (participantes && participantes.length > 0) {
-      this.notificacionesService
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
-        .notificarCreacionJuicio(juicio.id)
-        .catch((error) => {
-          console.error('Error enviando notificaciones:', error);
-        });
+      // Enviar notificaciones
+      if (participantes && participantes.length > 0) {
+        this.notificacionesService
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-member-access
+          .notificarCreacionJuicio(juicio.id)
+          .catch((error) => {
+            console.error('Error enviando notificaciones:', error);
+          });
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+      return juicio;
+    } catch (error) {
+      console.error('Error creando juicio:', error);
+      throw error;
     }
-
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-    return juicio;
   }
 
   async findAll(search?: string) {

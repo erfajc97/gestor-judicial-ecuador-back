@@ -45,14 +45,24 @@ export class AllExceptionsFilter implements ExceptionFilter {
           : (message as { message?: string | string[] }).message || message,
     };
 
-    // Solo loguear errores que no sean 404 comunes
-    if (status !== 404 || !ignoredPaths.includes(request.url)) {
+    // Loguear todos los errores excepto favicon.ico
+    if (!ignoredPaths.includes(request.url)) {
       this.logger.error(
-        `${request.method} ${request.url}`,
+        `${request.method} ${request.url} - Status: ${status}`,
         exception instanceof Error
           ? exception.stack
           : JSON.stringify(exception),
       );
+      // Si es un error 500, loguear también el body de la request para debugging
+      if (
+        status === (HttpStatus.INTERNAL_SERVER_ERROR as number) &&
+        request.body
+      ) {
+        this.logger.error(
+          'Request body:',
+          JSON.stringify(request.body, null, 2),
+        );
+      }
     }
 
     response.status(status).json(errorResponse);
