@@ -58,8 +58,14 @@ export class TelegramController {
   @Post('webhook')
   async handleWebhook(@Body() update: TelegramUpdate) {
     try {
+      console.log('📥 Webhook recibido:', JSON.stringify(update, null, 2));
+
       // Procesar callback queries (botones inline)
       if (update.callback_query) {
+        console.log(
+          '🔄 Procesando callback_query:',
+          update.callback_query.data,
+        );
         const chatId = update.callback_query.from.id.toString();
         const callbackData = update.callback_query.data;
         const from = update.callback_query.from;
@@ -129,8 +135,13 @@ export class TelegramController {
         const text = update.message.text.trim();
         const from = update.message.from;
 
+        console.log(
+          `💬 Mensaje recibido de ${from.first_name} (${chatId}): ${text}`,
+        );
+
         // Si el usuario envía /start, registrar su chat ID
         if (text === '/start' || text.startsWith('/start')) {
+          console.log('🚀 Procesando comando /start');
           // Buscar si ya existe un participante con este chat ID
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
           const participantes = await this.participantesService.findAll();
@@ -147,11 +158,13 @@ export class TelegramController {
 
             // Si solo se envía /start sin tipo, mostrar instrucciones con botones
             if (partes.length === 1 || partes[1].trim() === '') {
-              await this.telegramService.sendMessage(
+              console.log('📤 Enviando mensaje de bienvenida con botones');
+              const mensajeEnviado = await this.telegramService.sendMessage(
                 chatId,
                 `👋 <b>¡Bienvenido!</b>\n\nPara registrarte en el sistema, selecciona tu tipo de participante usando los botones de abajo:`,
                 this.telegramService.getTipoParticipanteKeyboard(),
               );
+              console.log('✅ Mensaje enviado:', mensajeEnviado);
               return { ok: true, message: 'Instrucciones enviadas' };
             }
 
@@ -229,9 +242,14 @@ export class TelegramController {
         }
       }
 
+      console.log('✅ Webhook procesado correctamente');
       return { ok: true };
     } catch (error) {
-      console.error('Error procesando webhook:', error);
+      console.error('❌ Error procesando webhook:', error);
+      if (error instanceof Error) {
+        console.error('Error message:', error.message);
+        console.error('Error stack:', error.stack);
+      }
       return { ok: false, error: 'Error procesando webhook' };
     }
   }
@@ -239,6 +257,11 @@ export class TelegramController {
   @Get('set-webhook')
   async setWebhook(@Query('url') url: string) {
     return this.telegramService.setWebhook(url);
+  }
+
+  @Get('webhook-info')
+  async getWebhookInfo() {
+    return this.telegramService.getWebhookInfo();
   }
 
   @Post('register')

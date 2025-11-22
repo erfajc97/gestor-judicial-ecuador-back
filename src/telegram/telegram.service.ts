@@ -111,7 +111,7 @@ export class TelegramService {
     return { success, failed };
   }
 
-  async createGroup(groupName: string): Promise<string | null> {
+  createGroup(groupName: string): Promise<string | null> {
     if (!this.botToken) {
       this.logger.warn('TELEGRAM_BOT_TOKEN no configurado');
       return Promise.resolve(null);
@@ -226,6 +226,47 @@ Faltan ${horasAntes} hora(s) para el inicio del juicio.
     } catch (error) {
       this.logger.error('Error configurando webhook:', error);
       return { ok: false, message: 'Error configurando webhook' };
+    }
+  }
+
+  async getWebhookInfo(): Promise<{
+    ok: boolean;
+    url?: string;
+    pending_update_count?: number;
+    last_error_date?: number;
+    last_error_message?: string;
+  }> {
+    if (!this.botToken) {
+      this.logger.warn('TELEGRAM_BOT_TOKEN no configurado');
+      return { ok: false };
+    }
+
+    try {
+      const response = await axios.get(`${this.apiUrl}/getWebhookInfo`);
+      const result = response.data as {
+        ok: boolean;
+        result?: {
+          url: string;
+          pending_update_count: number;
+          last_error_date?: number;
+          last_error_message?: string;
+        };
+      };
+
+      if (result.ok && result.result) {
+        return {
+          ok: true,
+          url: result.result.url,
+          pending_update_count: result.result.pending_update_count,
+          last_error_date: result.result.last_error_date,
+          last_error_message: result.result.last_error_message,
+        };
+      }
+
+      return { ok: false };
+    } catch (error) {
+      this.logger.error('Error obteniendo información del webhook:', error);
+      return { ok: false };
     }
   }
 }

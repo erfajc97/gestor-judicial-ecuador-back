@@ -28,6 +28,7 @@ export class AppController {
         telegram: {
           webhook: 'POST /telegram/webhook',
           setWebhook: 'GET /telegram/set-webhook?url=...',
+          webhookInfo: 'GET /telegram/webhook-info',
           register: 'POST /telegram/register',
         },
       },
