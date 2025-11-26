@@ -114,8 +114,9 @@ export class TelegramController {
             | 'JUEZ'
             | 'ABOGADO_DEMANDANTE'
             | 'ABOGADO_DEFENSOR'
-            | 'ACUSADO'
-            | 'PERITO';
+            | 'SECRETARIO'
+            | 'PSICOLOGO'
+            | 'FORENSE';
 
           // Buscar si ya existe un participante con este chat ID
           // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -191,7 +192,7 @@ export class TelegramController {
 
           if (!participanteExistente) {
             // Intentar detectar el tipo de participante desde el comando /start
-            // Formato: /start TIPO (ej: /start JUEZ, /start ACUSADO)
+            // Formato: /start TIPO (ej: /start JUEZ, /start SECRETARIO)
             const partes = text.split(' ');
 
             // Si solo se envía /start sin tipo, mostrar instrucciones con botones
@@ -212,14 +213,16 @@ export class TelegramController {
               | 'JUEZ'
               | 'ABOGADO_DEMANDANTE'
               | 'ABOGADO_DEFENSOR'
-              | 'ACUSADO'
-              | 'PERITO'
+              | 'SECRETARIO'
+              | 'PSICOLOGO'
+              | 'FORENSE'
             > = [
               'JUEZ',
               'ABOGADO_DEMANDANTE',
               'ABOGADO_DEFENSOR',
-              'ACUSADO',
-              'PERITO',
+              'SECRETARIO',
+              'PSICOLOGO',
+              'FORENSE',
             ];
 
             if (
@@ -228,13 +231,14 @@ export class TelegramController {
                   | 'JUEZ'
                   | 'ABOGADO_DEMANDANTE'
                   | 'ABOGADO_DEFENSOR'
-                  | 'ACUSADO'
-                  | 'PERITO',
+                  | 'SECRETARIO'
+                  | 'PSICOLOGO'
+                  | 'FORENSE',
               )
             ) {
               await this.telegramService.sendMessage(
                 chatId,
-                `❌ <b>Tipo inválido</b>\n\nEl tipo "<code>${tipoIngresado}</code>" no es válido.\n\n<b>Tipos válidos:</b>\n• JUEZ\n• ABOGADO_DEMANDANTE\n• ABOGADO_DEFENSOR\n• ACUSADO\n• PERITO\n\n<b>Ejemplo:</b>\n/start JUEZ`,
+                `❌ <b>Tipo inválido</b>\n\nEl tipo "<code>${tipoIngresado}</code>" no es válido.\n\n<b>Tipos válidos:</b>\n• JUEZ\n• ABOGADO_DEMANDANTE\n• ABOGADO_DEFENSOR\n• SECRETARIO\n• PSICOLOGO\n• FORENSE\n\n<b>Ejemplo:</b>\n/start JUEZ`,
               );
               return { ok: true, message: 'Tipo inválido' };
             }
@@ -274,7 +278,7 @@ export class TelegramController {
         if (text === '/help') {
           await this.telegramService.sendMessage(
             chatId,
-            `📋 <b>Comandos disponibles:</b>\n\n/start - Registrarse en el sistema\n/start TIPO - Registrarse especificando tu tipo\n   Tipos válidos: JUEZ, ABOGADO_DEMANDANTE, ABOGADO_DEFENSOR, ACUSADO, PERITO\n/help - Mostrar esta ayuda\n\n<b>Ejemplo:</b>\n/start JUEZ\n/start ABOGADO_DEMANDANTE\n\nPara más información, contacta al administrador del sistema.`,
+            `📋 <b>Comandos disponibles:</b>\n\n/start - Registrarse en el sistema\n/start TIPO - Registrarse especificando tu tipo\n   Tipos válidos: JUEZ, ABOGADO_DEMANDANTE, ABOGADO_DEFENSOR, SECRETARIO, PSICOLOGO, FORENSE\n/help - Mostrar esta ayuda\n\n<b>Ejemplo:</b>\n/start JUEZ\n/start ABOGADO_DEMANDANTE\n\nPara más información, contacta al administrador del sistema.`,
           );
           return { ok: true };
         }

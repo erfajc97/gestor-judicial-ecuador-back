@@ -12,8 +12,9 @@ enum TipoParticipante {
   JUEZ
   ABOGADO_DEMANDANTE
   ABOGADO_DEFENSOR
-  ACUSADO
-  PERITO
+  SECRETARIO
+  PSICOLOGO
+  FORENSE
 }
 
 enum EstadoJuicio {

@@ -50,28 +50,41 @@ async function main() {
     },
   });
 
-  const acusado = await prisma.participante.upsert({
-    where: { id: 'acusado-1' },
+  const secretario = await prisma.participante.upsert({
+    where: { id: 'secretario-1' },
     update: {},
     create: {
-      id: 'acusado-1',
+      id: 'secretario-1',
       nombre: 'Sr. Pedro López',
-      email: 'pedro.lopez@email.com',
+      email: 'pedro.lopez@judicatura.gob.ec',
       telefono: '+593 99 456 7890',
-      tipo: 'ACUSADO',
+      tipo: 'SECRETARIO',
       telegramChatId: null,
     },
   });
 
-  const perito = await prisma.participante.upsert({
-    where: { id: 'perito-1' },
+  const forense = await prisma.participante.upsert({
+    where: { id: 'forense-1' },
     update: {},
     create: {
-      id: 'perito-1',
+      id: 'forense-1',
       nombre: 'Ing. Ana Martínez',
-      email: 'ana.martinez@peritos.ec',
+      email: 'ana.martinez@forenses.ec',
       telefono: '+593 99 567 8901',
-      tipo: 'PERITO',
+      tipo: 'FORENSE',
+      telegramChatId: null,
+    },
+  });
+
+  const psicologo = await prisma.participante.upsert({
+    where: { id: 'psicologo-1' },
+    update: {},
+    create: {
+      id: 'psicologo-1',
+      nombre: 'Psic. Luis Ramírez',
+      email: 'luis.ramirez@psicologia.ec',
+      telefono: '+593 99 678 9012',
+      tipo: 'PSICOLOGO',
       telegramChatId: null,
     },
   });
@@ -103,15 +116,15 @@ async function main() {
     },
   });
 
-  const acusado2 = await prisma.participante.upsert({
-    where: { id: 'acusado-2' },
+  const secretario2 = await prisma.participante.upsert({
+    where: { id: 'secretario-2' },
     update: {},
     create: {
-      id: 'acusado-2',
+      id: 'secretario-2',
       nombre: 'Sra. Carmen Torres',
-      email: 'carmen.torres@email.com',
+      email: 'carmen.torres@judicatura.gob.ec',
       telefono: '+593 99 890 1234',
-      tipo: 'ACUSADO',
+      tipo: 'SECRETARIO',
       telegramChatId: null,
     },
   });
@@ -122,10 +135,11 @@ async function main() {
     abogadoDemandante: abogadoDemandante.nombre,
     abogadoDemandante2: abogadoDemandante2.nombre,
     abogadoDefensor: abogadoDefensor.nombre,
-    acusado: acusado.nombre,
-    acusado2: acusado2.nombre,
-    perito: perito.nombre,
-    total: 8,
+    secretario: secretario.nombre,
+    secretario2: secretario2.nombre,
+    forense: forense.nombre,
+    psicologo: psicologo.nombre,
+    total: 9,
   });
 
   // Crear juicios de ejemplo
@@ -158,12 +172,16 @@ async function main() {
             rol: 'Abogado defensor',
           },
           {
-            participanteId: acusado.id,
-            rol: 'Acusado',
+            participanteId: secretario.id,
+            rol: 'Secretario',
           },
           {
-            participanteId: perito.id,
-            rol: 'Perito técnico',
+            participanteId: forense.id,
+            rol: 'Forense técnico',
+          },
+          {
+            participanteId: psicologo.id,
+            rol: 'Psicólogo',
           },
         ],
       },
@@ -199,8 +217,8 @@ async function main() {
             rol: 'Abogado defensor',
           },
           {
-            participanteId: acusado2.id,
-            rol: 'Demandado',
+            participanteId: secretario2.id,
+            rol: 'Secretario',
           },
         ],
       },
@@ -244,7 +262,7 @@ async function main() {
     juicio1: {
       numeroCaso: juicio1.numeroCaso,
       tipo: 'Penal',
-      participantes: 5,
+      participantes: 6,
     },
     juicio2: {
       numeroCaso: juicio2.numeroCaso,

@@ -20,6 +20,34 @@ export class NotificacionesService {
     private auditoriaService: AuditoriaService,
   ) {}
 
+  /**
+   * Actualiza el estado de la notificación a ENTREGADO después de 1 minuto
+   */
+  private programarCambioAEntregado(notificacionId: string): void {
+    setTimeout(() => {
+      void (async () => {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+          await (this.prisma as any).notificacion.update({
+            where: { id: notificacionId },
+            data: {
+              estado: EstadoNotificacion.ENTREGADO,
+              fechaEntrega: new Date(),
+            },
+          });
+          this.logger.log(
+            `Notificación ${notificacionId} marcada como ENTREGADA después de 1 minuto`,
+          );
+        } catch (error) {
+          this.logger.error(
+            `Error al actualizar estado a ENTREGADO para notificación ${notificacionId}:`,
+            error,
+          );
+        }
+      })();
+    }, 60000); // 1 minuto = 60000ms
+  }
+
   async notificarCreacionJuicio(juicioId: string) {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     const juicio = (await (this.prisma as any).juicio.findUnique({
@@ -114,16 +142,21 @@ export class NotificacionesService {
       );
 
       if (result.success && result.messageId) {
+        // Actualizar como enviada pero mantener estado ENVIADO
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         await (this.prisma as any).notificacion.update({
           where: { id: notificacion.id },
           data: {
             enviada: true,
-            estado: EstadoNotificacion.ENTREGADO,
+            estado: EstadoNotificacion.ENVIADO, // Mantener ENVIADO
             messageId: result.messageId.toString(),
-            fechaEntrega: new Date(),
+            fechaEnvio: new Date(),
           },
         });
+
+        // Programar cambio a ENTREGADO después de 1 minuto
+        this.programarCambioAEntregado(notificacion.id);
+
         successCount++;
       } else {
         // Registrar error en auditoría
@@ -233,16 +266,21 @@ export class NotificacionesService {
       );
 
       if (result.success && result.messageId) {
+        // Actualizar como enviada pero mantener estado ENVIADO
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         await (this.prisma as any).notificacion.update({
           where: { id: notificacion.id },
           data: {
             enviada: true,
-            estado: EstadoNotificacion.ENTREGADO,
+            estado: EstadoNotificacion.ENVIADO, // Mantener ENVIADO
             messageId: result.messageId.toString(),
-            fechaEntrega: new Date(),
+            fechaEnvio: new Date(),
           },
         });
+
+        // Programar cambio a ENTREGADO después de 1 minuto
+        this.programarCambioAEntregado(notificacion.id);
+
         successCount++;
       } else {
         await this.auditoriaService.registrarError({
@@ -348,16 +386,21 @@ export class NotificacionesService {
       );
 
       if (result.success && result.messageId) {
+        // Actualizar como enviada pero mantener estado ENVIADO
         // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
         await (this.prisma as any).notificacion.update({
           where: { id: notificacion.id },
           data: {
             enviada: true,
-            estado: EstadoNotificacion.ENTREGADO,
+            estado: EstadoNotificacion.ENVIADO, // Mantener ENVIADO
             messageId: result.messageId.toString(),
-            fechaEntrega: new Date(),
+            fechaEnvio: new Date(),
           },
         });
+
+        // Programar cambio a ENTREGADO después de 1 minuto
+        this.programarCambioAEntregado(notificacion.id);
+
         successCount++;
       } else {
         await this.auditoriaService.registrarError({

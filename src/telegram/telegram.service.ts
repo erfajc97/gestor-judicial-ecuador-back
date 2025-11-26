@@ -158,9 +158,12 @@ export class TelegramService {
             text: '🛡️ Abogado Defensor',
             callback_data: 'tipo_ABOGADO_DEFENSOR',
           },
-          { text: '👤 Acusado', callback_data: 'tipo_ACUSADO' },
+          { text: '📝 Secretario', callback_data: 'tipo_SECRETARIO' },
         ],
-        [{ text: '🔬 Perito', callback_data: 'tipo_PERITO' }],
+        [
+          { text: '🧠 Psicólogo', callback_data: 'tipo_PSICOLOGO' },
+          { text: '🔬 Forense', callback_data: 'tipo_FORENSE' },
+        ],
       ],
     };
   }
