@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { TipoError } from '../../generated/prisma/enums';
 import type { JuicioWithParticipants } from './types';
 
 @Injectable()
@@ -9,7 +11,10 @@ export class TelegramService {
   private readonly botToken: string;
   private readonly apiUrl: string;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private auditoriaService: AuditoriaService,
+  ) {
     this.botToken = this.configService.get<string>('TELEGRAM_BOT_TOKEN') || '';
     this.apiUrl = `https://api.telegram.org/bot${this.botToken}`;
   }
@@ -23,10 +28,10 @@ export class TelegramService {
       resize_keyboard?: boolean;
       one_time_keyboard?: boolean;
     },
-  ): Promise<boolean> {
+  ): Promise<{ success: boolean; messageId?: number }> {
     if (!this.botToken) {
       this.logger.warn('TELEGRAM_BOT_TOKEN no configurado');
-      return false;
+      return { success: false };
     }
 
     try {
@@ -53,11 +58,83 @@ export class TelegramService {
       }
 
       const response = await axios.post(`${this.apiUrl}/sendMessage`, payload);
+      const responseData = response.data as {
+        ok: boolean;
+        result?: { message_id: number };
+      };
 
-      return (response.data as { ok: boolean }).ok === true;
+      if (responseData.ok && responseData.result) {
+        return {
+          success: true,
+          messageId: responseData.result.message_id,
+        };
+      }
+
+      return { success: false };
     } catch (error) {
       this.logger.error(`Error enviando mensaje a ${chatId}:`, error);
-      return false;
+
+      // Registrar error en auditoría
+      if (axios.isAxiosError(error)) {
+        const errorCode = error.response?.status;
+
+        const errorData = error.response?.data as
+          | { description?: string }
+          | undefined;
+        const errorDescription = errorData?.description || error.message;
+
+        // Determinar tipo de error específico
+        let tipoError: TipoError = TipoError.TELEGRAM_API_ERROR;
+        if (errorCode === 400) {
+          // Bad Request - puede ser chat_id inválido
+
+          if (
+            typeof errorDescription === 'string' &&
+            (errorDescription.includes('chat not found') ||
+              errorDescription.includes('chat_id'))
+          ) {
+            tipoError = TipoError.NOTIFICACION_TELEGRAM_ID_INVALIDO;
+          }
+        } else if (errorCode === 403) {
+          // Forbidden - bot bloqueado
+          tipoError = TipoError.NOTIFICACION_BOT_BLOQUEADO;
+        }
+
+        this.auditoriaService
+          .registrarError({
+            tipoError,
+            entidad: 'Notificacion',
+            mensaje: `Error de Telegram API al enviar mensaje a ${chatId}: ${errorDescription}`,
+            detalles: {
+              chatId,
+              errorCode,
+              errorDescription,
+              url: `${this.apiUrl}/sendMessage`,
+            },
+            stackTrace: error.stack,
+          })
+          .catch((auditError) => {
+            this.logger.error('Error al registrar en auditoría:', auditError);
+          });
+      } else {
+        this.auditoriaService
+          .registrarError({
+            tipoError: TipoError.TELEGRAM_API_ERROR,
+            entidad: 'Notificacion',
+            mensaje: `Error desconocido al enviar mensaje a ${chatId}`,
+            detalles: {
+              chatId,
+              error:
+                error instanceof Error ? error.message : 'Error desconocido',
+            },
+            stackTrace: error instanceof Error ? error.stack : undefined,
+          })
+          .catch((auditError) => {
+            this.logger.error('Error al registrar en auditoría:', auditError);
+          });
+      }
+
+      return { success: false };
     }
   }
 
@@ -88,27 +165,65 @@ export class TelegramService {
     };
   }
 
-  async sendMessageToGroup(groupId: string, message: string): Promise<boolean> {
+  async sendMessageToGroup(
+    groupId: string,
+    message: string,
+  ): Promise<{ success: boolean; messageId?: number }> {
     return this.sendMessage(groupId, message);
   }
 
   async sendMessageToMultipleUsers(
     chatIds: string[],
     message: string,
-  ): Promise<{ success: number; failed: number }> {
+    keyboard?: {
+      inline_keyboard?: Array<Array<{ text: string; callback_data: string }>>;
+    },
+  ): Promise<{
+    success: number;
+    failed: number;
+    results: Array<{ chatId: string; success: boolean; messageId?: number }>;
+  }> {
     let success = 0;
     let failed = 0;
+    const results: Array<{
+      chatId: string;
+      success: boolean;
+      messageId?: number;
+    }> = [];
 
     for (const chatId of chatIds) {
-      const result = await this.sendMessage(chatId, message);
-      if (result) {
+      const result = await this.sendMessage(chatId, message, keyboard);
+      if (result.success) {
         success++;
       } else {
         failed++;
       }
+      results.push({
+        chatId,
+        success: result.success,
+        messageId: result.messageId,
+      });
     }
 
-    return { success, failed };
+    return { success, failed, results };
+  }
+
+  /**
+   * Crea un teclado inline con botón de confirmación de lectura
+   */
+  getConfirmacionLecturaKeyboard(notificacionId: string): {
+    inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+  } {
+    return {
+      inline_keyboard: [
+        [
+          {
+            text: '✅ Confirmar Lectura',
+            callback_data: `confirmar_lectura_${notificacionId}`,
+          },
+        ],
+      ],
+    };
   }
 
   createGroup(groupName: string): Promise<string | null> {

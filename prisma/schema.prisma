@@ -32,6 +32,25 @@ enum TipoNotificacion {
   CANCELACION
 }
 
+enum EstadoNotificacion {
+  ENVIADO
+  ENTREGADO
+  LEIDO
+}
+
+enum TipoError {
+  NOTIFICACION_TELEGRAM_ID_INVALIDO
+  NOTIFICACION_BOT_BLOQUEADO
+  NOTIFICACION_API_ERROR
+  PARTICIPANTE_VALIDACION
+  PARTICIPANTE_DUPLICADO
+  JUICIO_VALIDACION
+  JUICIO_PARTICIPANTE_NO_ENCONTRADO
+  TELEGRAM_API_ERROR
+  DATABASE_ERROR
+  OTRO
+}
+
 model Juicio {
   id          String       @id @default(uuid())
   numeroCaso  String       @unique
@@ -81,17 +100,40 @@ model JuicioParticipante {
 }
 
 model Notificacion {
-  id             String           @id @default(uuid())
+  id             String             @id @default(uuid())
   juicioId       String
   participanteId String?
   tipo           TipoNotificacion
   mensaje        String
-  enviada        Boolean          @default(false)
+  enviada        Boolean            @default(false)
   fechaEnvio     DateTime?
-  createdAt      DateTime         @default(now())
+  estado         EstadoNotificacion @default(ENVIADO)
+  messageId      String?
+  fechaEntrega   DateTime?
+  fechaLectura   DateTime?
+  createdAt      DateTime           @default(now())
 
   juicio       Juicio        @relation(fields: [juicioId], references: [id], onDelete: Cascade)
   participante Participante? @relation(fields: [participanteId], references: [id], onDelete: SetNull)
 
   @@map("notificaciones")
+}
+
+model Auditoria {
+  id              String    @id @default(uuid())
+  tipoError       TipoError
+  entidad         String
+  entidadId       String?
+  mensaje         String
+  detalles        Json?
+  stackTrace      String?   @db.Text
+  resuelto        Boolean   @default(false)
+  fechaResolucion DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([tipoError])
+  @@index([entidad])
+  @@index([createdAt])
+  @@index([resuelto])
+  @@map("auditoria")
 }

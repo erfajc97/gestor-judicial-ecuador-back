@@ -1,7 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
-import { TipoNotificacion } from '../../generated/prisma/enums';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import {
+  TipoNotificacion,
+  EstadoNotificacion,
+  TipoError,
+} from '../../generated/prisma/enums';
 import type { JuicioWithParticipants } from '../telegram/types';
 
 @Injectable()
@@ -10,7 +15,9 @@ export class NotificacionesService {
 
   constructor(
     private prisma: PrismaService,
+    @Inject(forwardRef(() => TelegramService))
     private telegramService: TelegramService,
+    private auditoriaService: AuditoriaService,
   ) {}
 
   async notificarCreacionJuicio(juicioId: string) {
@@ -61,30 +68,81 @@ export class NotificacionesService {
       );
     }
 
-    const results = await this.telegramService.sendMessageToMultipleUsers(
-      chatIds,
-      mensajeFinal,
-    );
+    // Crear notificaciones primero para obtener sus IDs
+    const notificacionesCreadas: Array<{
+      id: string;
+      participanteId: string;
+      chatId: string;
+    }> = [];
 
-    // Guardar notificaciones en la base de datos
     for (const jp of juicio.participantes || []) {
       if (jp.participante.telegramChatId) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        await (this.prisma as any).notificacion.create({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+        const notificacion = await (this.prisma as any).notificacion.create({
           data: {
             juicioId: juicio.id,
             participanteId: jp.participante.id,
             tipo: TipoNotificacion.CREACION,
             mensaje: mensajeFinal,
-            enviada: true,
+            enviada: false,
+            estado: EstadoNotificacion.ENVIADO,
             fechaEnvio: new Date(),
           },
+        });
+        const notifId = (notificacion as { id: string }).id;
+        notificacionesCreadas.push({
+          id: notifId,
+          participanteId: jp.participante.id,
+          chatId: jp.participante.telegramChatId,
         });
       }
     }
 
+    // Enviar mensajes individualmente con su propio botón de confirmación
+    let successCount = 0;
+    let failedCount = 0;
+
+    for (const notificacion of notificacionesCreadas) {
+      const keyboard = this.telegramService.getConfirmacionLecturaKeyboard(
+        notificacion.id,
+      );
+
+      const result = await this.telegramService.sendMessage(
+        notificacion.chatId,
+        mensajeFinal,
+        keyboard,
+      );
+
+      if (result.success && result.messageId) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+        await (this.prisma as any).notificacion.update({
+          where: { id: notificacion.id },
+          data: {
+            enviada: true,
+            estado: EstadoNotificacion.ENTREGADO,
+            messageId: result.messageId.toString(),
+            fechaEntrega: new Date(),
+          },
+        });
+        successCount++;
+      } else {
+        // Registrar error en auditoría
+        await this.auditoriaService.registrarError({
+          tipoError: TipoError.NOTIFICACION_API_ERROR,
+          entidad: 'Notificacion',
+          entidadId: notificacion.id,
+          mensaje: `Error al enviar notificación a participante ${notificacion.participanteId}`,
+          detalles: {
+            chatId: notificacion.chatId,
+            juicioId: juicio.id,
+          },
+        });
+        failedCount++;
+      }
+    }
+
     this.logger.log(
-      `Notificaciones enviadas: ${results.success} exitosas, ${results.failed} fallidas`,
+      `Notificaciones enviadas: ${successCount} exitosas, ${failedCount} fallidas`,
     );
 
     // Si quedan más de 1 hora, programar recordatorio para 1 hora antes
@@ -129,30 +187,80 @@ export class NotificacionesService {
       return;
     }
 
-    const results = await this.telegramService.sendMessageToMultipleUsers(
-      chatIds,
-      mensaje,
-    );
+    // Crear notificaciones primero
+    const notificacionesCreadas: Array<{
+      id: string;
+      participanteId: string;
+      chatId: string;
+    }> = [];
 
-    // Guardar notificaciones
     for (const jp of juicio.participantes || []) {
       if (jp.participante.telegramChatId) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        await (this.prisma as any).notificacion.create({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+        const notificacion = await (this.prisma as any).notificacion.create({
           data: {
             juicioId: juicio.id,
             participanteId: jp.participante.id,
             tipo: TipoNotificacion.ACTUALIZACION,
             mensaje: mensaje,
-            enviada: true,
+            enviada: false,
+            estado: EstadoNotificacion.ENVIADO,
             fechaEnvio: new Date(),
           },
+        });
+        const notifId = (notificacion as { id: string }).id;
+        notificacionesCreadas.push({
+          id: notifId,
+          participanteId: jp.participante.id,
+          chatId: jp.participante.telegramChatId,
         });
       }
     }
 
+    // Enviar mensajes individualmente con su propio botón de confirmación
+    let successCount = 0;
+    let failedCount = 0;
+
+    for (const notificacion of notificacionesCreadas) {
+      const keyboard = this.telegramService.getConfirmacionLecturaKeyboard(
+        notificacion.id,
+      );
+
+      const result = await this.telegramService.sendMessage(
+        notificacion.chatId,
+        mensaje,
+        keyboard,
+      );
+
+      if (result.success && result.messageId) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+        await (this.prisma as any).notificacion.update({
+          where: { id: notificacion.id },
+          data: {
+            enviada: true,
+            estado: EstadoNotificacion.ENTREGADO,
+            messageId: result.messageId.toString(),
+            fechaEntrega: new Date(),
+          },
+        });
+        successCount++;
+      } else {
+        await this.auditoriaService.registrarError({
+          tipoError: TipoError.NOTIFICACION_API_ERROR,
+          entidad: 'Notificacion',
+          entidadId: notificacion.id,
+          mensaje: `Error al enviar notificación de actualización a participante ${notificacion.participanteId}`,
+          detalles: {
+            chatId: notificacion.chatId,
+            juicioId: juicio.id,
+          },
+        });
+        failedCount++;
+      }
+    }
+
     this.logger.log(
-      `Notificaciones de actualización enviadas: ${results.success} exitosas, ${results.failed} fallidas`,
+      `Notificaciones de actualización enviadas: ${successCount} exitosas, ${failedCount} fallidas`,
     );
   }
 
@@ -194,30 +302,101 @@ export class NotificacionesService {
         ? TipoNotificacion.RECORDATORIO_24H
         : TipoNotificacion.RECORDATORIO_1H;
 
-    const results = await this.telegramService.sendMessageToMultipleUsers(
-      chatIds,
-      mensaje,
-    );
+    // Crear notificaciones primero
+    const notificacionesCreadas: Array<{
+      id: string;
+      participanteId: string;
+      chatId: string;
+    }> = [];
 
-    // Guardar notificaciones
     for (const jp of juicio.participantes || []) {
       if (jp.participante.telegramChatId) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-        await (this.prisma as any).notificacion.create({
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+        const notificacion = await (this.prisma as any).notificacion.create({
           data: {
             juicioId: juicio.id,
             participanteId: jp.participante.id,
             tipo: tipoNotificacion,
             mensaje: mensaje,
-            enviada: true,
+            enviada: false,
+            estado: EstadoNotificacion.ENVIADO,
             fechaEnvio: new Date(),
           },
+        });
+        const notifId = (notificacion as { id: string }).id;
+        notificacionesCreadas.push({
+          id: notifId,
+          participanteId: jp.participante.id,
+          chatId: jp.participante.telegramChatId,
         });
       }
     }
 
+    // Enviar mensajes individualmente con su propio botón de confirmación
+    let successCount = 0;
+    let failedCount = 0;
+
+    for (const notificacion of notificacionesCreadas) {
+      const keyboard = this.telegramService.getConfirmacionLecturaKeyboard(
+        notificacion.id,
+      );
+
+      const result = await this.telegramService.sendMessage(
+        notificacion.chatId,
+        mensaje,
+        keyboard,
+      );
+
+      if (result.success && result.messageId) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+        await (this.prisma as any).notificacion.update({
+          where: { id: notificacion.id },
+          data: {
+            enviada: true,
+            estado: EstadoNotificacion.ENTREGADO,
+            messageId: result.messageId.toString(),
+            fechaEntrega: new Date(),
+          },
+        });
+        successCount++;
+      } else {
+        await this.auditoriaService.registrarError({
+          tipoError: TipoError.NOTIFICACION_API_ERROR,
+          entidad: 'Notificacion',
+          entidadId: notificacion.id,
+          mensaje: `Error al enviar recordatorio a participante ${notificacion.participanteId}`,
+          detalles: {
+            chatId: notificacion.chatId,
+            juicioId: juicio.id,
+            horasAntes,
+          },
+        });
+        failedCount++;
+      }
+    }
+
     this.logger.log(
-      `Recordatorios enviados (${horasAntes}h antes): ${results.success} exitosas, ${results.failed} fallidas`,
+      `Recordatorios enviados (${horasAntes}h antes): ${successCount} exitosas, ${failedCount} fallidas`,
     );
+  }
+
+  async marcarComoLeido(notificacionId: string): Promise<void> {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      await (this.prisma as any).notificacion.update({
+        where: { id: notificacionId },
+        data: {
+          estado: EstadoNotificacion.LEIDO,
+          fechaLectura: new Date(),
+        },
+      });
+      this.logger.log(`Notificación ${notificacionId} marcada como leída`);
+    } catch (error) {
+      this.logger.error(
+        `Error al marcar notificación ${notificacionId} como leída:`,
+        error,
+      );
+      throw error;
+    }
   }
 }

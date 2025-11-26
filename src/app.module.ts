@@ -5,6 +5,7 @@ import { JuiciosModule } from './juicios/juicios.module';
 import { ParticipantesModule } from './participantes/participantes.module';
 import { TelegramModule } from './telegram/telegram.module';
 import { NotificacionesModule } from './notificaciones/notificaciones.module';
+import { AuditoriaModule } from './auditoria/auditoria.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -17,6 +18,7 @@ import { AppController } from './app.controller';
     ParticipantesModule,
     TelegramModule,
     NotificacionesModule,
+    AuditoriaModule,
   ],
   controllers: [AppController],
   providers: [],

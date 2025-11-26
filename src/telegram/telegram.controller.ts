@@ -1,6 +1,15 @@
-import { Controller, Post, Body, Get, Query } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  Query,
+  Inject,
+  forwardRef,
+} from '@nestjs/common';
 import { TelegramService } from './telegram.service';
 import { ParticipantesService } from '../participantes/participantes.service';
+import { NotificacionesService } from '../notificaciones/notificaciones.service';
 import { TipoParticipante } from '../../generated/prisma/enums';
 
 class RegisterUserDto {
@@ -53,6 +62,8 @@ export class TelegramController {
   constructor(
     private readonly telegramService: TelegramService,
     private readonly participantesService: ParticipantesService,
+    @Inject(forwardRef(() => NotificacionesService))
+    private readonly notificacionesService: NotificacionesService,
   ) {}
 
   @Post('webhook')
@@ -69,6 +80,33 @@ export class TelegramController {
         const chatId = update.callback_query.from.id.toString();
         const callbackData = update.callback_query.data;
         const from = update.callback_query.from;
+
+        // Procesar confirmación de lectura
+        if (callbackData.startsWith('confirmar_lectura_')) {
+          const notificacionId = callbackData.replace('confirmar_lectura_', '');
+          console.log(
+            `📖 Confirmando lectura de notificación: ${notificacionId}`,
+          );
+
+          try {
+            await this.notificacionesService.marcarComoLeido(notificacionId);
+
+            // Responder al callback query
+            await this.telegramService.answerCallbackQuery(
+              update.callback_query.id,
+              '✅ Lectura confirmada',
+            );
+
+            return { ok: true, message: 'Lectura confirmada' };
+          } catch (error) {
+            console.error('Error al confirmar lectura:', error);
+            await this.telegramService.answerCallbackQuery(
+              update.callback_query.id,
+              '❌ Error al confirmar lectura',
+            );
+            return { ok: false, error: 'Error al confirmar lectura' };
+          }
+        }
 
         // Procesar selección de tipo de participante
         if (callbackData.startsWith('tipo_')) {

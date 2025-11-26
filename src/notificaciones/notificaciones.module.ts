@@ -1,10 +1,11 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { NotificacionesService } from './notificaciones.service';
 import { TelegramModule } from '../telegram/telegram.module';
 import { PrismaModule } from '../prisma/prisma.module';
+import { AuditoriaModule } from '../auditoria/auditoria.module';
 
 @Module({
-  imports: [PrismaModule, TelegramModule],
+  imports: [PrismaModule, forwardRef(() => TelegramModule), AuditoriaModule],
   providers: [NotificacionesService],
   exports: [NotificacionesService],
 })

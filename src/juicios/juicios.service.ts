@@ -1,15 +1,20 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificacionesService } from '../notificaciones/notificaciones.service';
+import { AuditoriaService } from '../auditoria/auditoria.service';
+import { TipoError } from '../../generated/prisma/enums';
 import { CreateJuicioDto } from './dto/create-juicio.dto';
 import { UpdateJuicioDto } from './dto/update-juicio.dto';
 import { AddParticipanteDto } from './dto/add-participante.dto';
 
 @Injectable()
 export class JuiciosService {
+  private readonly logger = new Logger(JuiciosService.name);
+
   constructor(
     private prisma: PrismaService,
     private notificacionesService: NotificacionesService,
+    private auditoriaService: AuditoriaService,
   ) {}
 
   async create(createJuicioDto: CreateJuicioDto) {
@@ -40,6 +45,15 @@ export class JuiciosService {
             console.error(
               `❌ Participante con ID "${p.participanteId}" no encontrado`,
             );
+            await this.auditoriaService.registrarError({
+              tipoError: TipoError.JUICIO_PARTICIPANTE_NO_ENCONTRADO,
+              entidad: 'Juicio',
+              mensaje: `Participante con ID "${p.participanteId}" no encontrado al crear juicio`,
+              detalles: {
+                participanteId: p.participanteId,
+                numeroCaso: juicioData.numeroCaso,
+              },
+            });
             throw new NotFoundException(
               `Participante con ID "${p.participanteId}" no encontrado`,
             );
@@ -50,6 +64,12 @@ export class JuiciosService {
 
       // Validar formato de fecha
       if (!juicioData.fecha || typeof juicioData.fecha !== 'string') {
+        await this.auditoriaService.registrarError({
+          tipoError: TipoError.JUICIO_VALIDACION,
+          entidad: 'Juicio',
+          mensaje: 'La fecha es requerida y debe ser una cadena de texto',
+          detalles: juicioData,
+        });
         throw new Error('La fecha es requerida y debe ser una cadena de texto');
       }
 
@@ -57,6 +77,12 @@ export class JuiciosService {
       const fechaRegex = /^\d{4}-\d{2}-\d{2}$/;
       if (!fechaRegex.test(juicioData.fecha)) {
         console.error(`❌ Formato de fecha inválido: "${juicioData.fecha}"`);
+        await this.auditoriaService.registrarError({
+          tipoError: TipoError.JUICIO_VALIDACION,
+          entidad: 'Juicio',
+          mensaje: `Formato de fecha inválido: "${juicioData.fecha}". Debe ser YYYY-MM-DD`,
+          detalles: juicioData,
+        });
         throw new Error(
           `Formato de fecha inválido: "${juicioData.fecha}". Debe ser YYYY-MM-DD`,
         );
@@ -72,6 +98,12 @@ export class JuiciosService {
         console.error(
           `❌ Fecha y hora inválidas: "${juicioData.fecha}" "${juicioData.hora}"`,
         );
+        await this.auditoriaService.registrarError({
+          tipoError: TipoError.JUICIO_VALIDACION,
+          entidad: 'Juicio',
+          mensaje: `Fecha y hora inválidas: "${juicioData.fecha}" "${juicioData.hora}"`,
+          detalles: juicioData,
+        });
         throw new Error(
           `Fecha y hora inválidas: "${juicioData.fecha}" "${juicioData.hora}"`,
         );
@@ -122,9 +154,18 @@ export class JuiciosService {
       return juicio;
     } catch (error) {
       console.error('❌ Error creando juicio:', error);
-      if (error instanceof NotFoundException) {
+      if (error instanceof NotFoundException || error instanceof Error) {
+        // Los errores de validación ya fueron registrados
         throw error;
       }
+      // Registrar errores de base de datos
+      await this.auditoriaService.registrarError({
+        tipoError: TipoError.DATABASE_ERROR,
+        entidad: 'Juicio',
+        mensaje: `Error al crear juicio: ${error instanceof Error ? error.message : 'Error desconocido'}`,
+        detalles: createJuicioDto as unknown as Record<string, unknown>,
+        stackTrace: error instanceof Error ? error.stack : undefined,
+      });
       // Si es un error de Prisma, extraer el mensaje
       if (error && typeof error === 'object' && 'message' in error) {
         const errorMessage = (error as { message: string }).message;
@@ -178,7 +219,11 @@ export class JuiciosService {
             participante: true,
           },
         },
-        notificaciones: true,
+        notificaciones: {
+          include: {
+            participante: true,
+          },
+        },
       },
     });
 
