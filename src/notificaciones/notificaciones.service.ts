@@ -423,8 +423,28 @@ export class NotificacionesService {
     );
   }
 
-  async marcarComoLeido(notificacionId: string): Promise<void> {
+  async marcarComoLeido(
+    notificacionId: string,
+  ): Promise<{ chatId: string | null }> {
     try {
+      // Obtener la notificación con el participante para obtener el chatId
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      const notificacion = await (this.prisma as any).notificacion.findUnique({
+        where: { id: notificacionId },
+        include: {
+          participante: {
+            select: {
+              telegramChatId: true,
+            },
+          },
+        },
+      });
+
+      if (!notificacion) {
+        throw new Error(`Notificación ${notificacionId} no encontrada`);
+      }
+
+      // Actualizar el estado a LEIDO
       // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
       await (this.prisma as any).notificacion.update({
         where: { id: notificacionId },
@@ -433,7 +453,15 @@ export class NotificacionesService {
           fechaLectura: new Date(),
         },
       });
+
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+      const participante = notificacion.participante as {
+        telegramChatId: string | null;
+      } | null;
+      const chatId = participante?.telegramChatId || null;
       this.logger.log(`Notificación ${notificacionId} marcada como leída`);
+
+      return { chatId };
     } catch (error) {
       this.logger.error(
         `Error al marcar notificación ${notificacionId} como leída:`,

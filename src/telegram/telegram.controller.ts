@@ -89,13 +89,22 @@ export class TelegramController {
           );
 
           try {
-            await this.notificacionesService.marcarComoLeido(notificacionId);
+            const { chatId } =
+              await this.notificacionesService.marcarComoLeido(notificacionId);
 
             // Responder al callback query
             await this.telegramService.answerCallbackQuery(
               update.callback_query.id,
               '✅ Lectura confirmada',
             );
+
+            // Enviar mensaje de confirmación al usuario si tiene chatId
+            if (chatId) {
+              await this.telegramService.sendMessage(
+                chatId,
+                '✅ <b>Lectura confirmada</b>\n\nTu confirmación de lectura ha sido registrada en el sistema.',
+              );
+            }
 
             return { ok: true, message: 'Lectura confirmada' };
           } catch (error) {
