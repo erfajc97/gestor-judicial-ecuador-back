@@ -2,11 +2,15 @@ import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { AuditoriaService } from '../auditoria/auditoria.service';
+import { MetricsRecorderService } from '../metrics/metrics-recorder.service';
 import {
   TipoNotificacion,
   EstadoNotificacion,
   TipoError,
+  NotificationChannel,
+  MetricStatus,
 } from '../../generated/prisma/enums';
+import { createHash } from 'crypto';
 import type { JuicioWithParticipants } from '../telegram/types';
 
 @Injectable()
@@ -18,7 +22,18 @@ export class NotificacionesService {
     @Inject(forwardRef(() => TelegramService))
     private telegramService: TelegramService,
     private auditoriaService: AuditoriaService,
+    private metricsRecorder: MetricsRecorderService,
   ) {}
+
+  /**
+   * Helper para generar hash del recipient (no guardar datos sensibles)
+   */
+  private hashRecipient(identifier: string): string {
+    return createHash('sha256')
+      .update(identifier)
+      .digest('hex')
+      .substring(0, 16);
+  }
 
   /**
    * Actualiza el estado de la notificación a ENTREGADO después de 1 minuto
@@ -46,6 +61,91 @@ export class NotificacionesService {
         }
       })();
     }, 60000); // 1 minuto = 60000ms
+  }
+
+  /**
+   * Envía notificación por Telegram con instrumentación de métricas
+   */
+  private async sendTelegramWithMetrics(
+    chatId: string,
+    message: string,
+    keyboard: {
+      inline_keyboard: Array<Array<{ text: string; callback_data: string }>>;
+    },
+    template: string,
+    experimentRunId?: string,
+  ): Promise<{ success: boolean; messageId?: number; correlationId: string }> {
+    const recipientHash = this.hashRecipient(chatId);
+    const sentAt = new Date();
+
+    // Registrar evento PENDING
+    const correlationId = await this.metricsRecorder.recordPendingEvent({
+      channel: NotificationChannel.TELEGRAM,
+      template,
+      recipientHash,
+      experimentRunId,
+    });
+
+    try {
+      // Enviar mensaje
+      const result = await this.telegramService.sendMessage(
+        chatId,
+        message,
+        keyboard,
+      );
+
+      if (result.success && result.messageId) {
+        // Actualizar a ACKED con latencia
+        const providerAckAt = new Date();
+        const latencyMs = providerAckAt.getTime() - sentAt.getTime();
+
+        await this.metricsRecorder.updateToAcked({
+          correlationId,
+          status: MetricStatus.ACKED,
+          providerAckAt,
+          latencyMs,
+        });
+
+        // Programar actualización a DELIVERED después de 1 minuto
+        setTimeout(() => {
+          void this.metricsRecorder.updateToDelivered(correlationId);
+        }, 60000);
+
+        return {
+          success: true,
+          messageId: result.messageId,
+          correlationId,
+        };
+      } else {
+        // Error al enviar
+        await this.metricsRecorder.updateToFailed(
+          correlationId,
+          'TELEGRAM_SEND_ERROR',
+          'Failed to send message to Telegram API',
+        );
+
+        return {
+          success: false,
+          correlationId,
+        };
+      }
+    } catch (error) {
+      // Error en la llamada
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+      const errorCode = 'TELEGRAM_API_ERROR';
+
+      await this.metricsRecorder.updateToFailed(
+        correlationId,
+        errorCode,
+        errorMessage,
+      );
+
+      return {
+        success: false,
+        correlationId,
+      };
+    }
   }
 
   async notificarCreacionJuicio(juicioId: string) {
@@ -135,10 +235,11 @@ export class NotificacionesService {
         notificacion.id,
       );
 
-      const result = await this.telegramService.sendMessage(
+      const result = await this.sendTelegramWithMetrics(
         notificacion.chatId,
         mensajeFinal,
         keyboard,
+        TipoNotificacion.CREACION,
       );
 
       if (result.success && result.messageId) {
@@ -168,6 +269,7 @@ export class NotificacionesService {
           detalles: {
             chatId: notificacion.chatId,
             juicioId: juicio.id,
+            correlationId: result.correlationId,
           },
         });
         failedCount++;
@@ -259,10 +361,11 @@ export class NotificacionesService {
         notificacion.id,
       );
 
-      const result = await this.telegramService.sendMessage(
+      const result = await this.sendTelegramWithMetrics(
         notificacion.chatId,
         mensaje,
         keyboard,
+        TipoNotificacion.ACTUALIZACION,
       );
 
       if (result.success && result.messageId) {
@@ -291,6 +394,7 @@ export class NotificacionesService {
           detalles: {
             chatId: notificacion.chatId,
             juicioId: juicio.id,
+            correlationId: result.correlationId,
           },
         });
         failedCount++;
@@ -379,10 +483,11 @@ export class NotificacionesService {
         notificacion.id,
       );
 
-      const result = await this.telegramService.sendMessage(
+      const result = await this.sendTelegramWithMetrics(
         notificacion.chatId,
         mensaje,
         keyboard,
+        tipoNotificacion,
       );
 
       if (result.success && result.messageId) {
@@ -412,6 +517,7 @@ export class NotificacionesService {
             chatId: notificacion.chatId,
             juicioId: juicio.id,
             horasAntes,
+            correlationId: result.correlationId,
           },
         });
         failedCount++;

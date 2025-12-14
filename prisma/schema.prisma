@@ -52,6 +52,33 @@ enum TipoError {
   OTRO
 }
 
+enum NotificationChannel {
+  EMAIL
+  TELEGRAM
+  BOTH
+}
+
+enum MetricStatus {
+  PENDING
+  SENT
+  ACKED
+  DELIVERED
+  FAILED
+}
+
+enum ExperimentScenario {
+  LATENCY
+  THROUGHPUT
+  ERROR_INJECTION
+}
+
+enum ExperimentStatus {
+  CREATED
+  RUNNING
+  DONE
+  FAILED
+}
+
 model Juicio {
   id          String       @id @default(uuid())
   numeroCaso  String       @unique
@@ -137,4 +164,71 @@ model Auditoria {
   @@index([createdAt])
   @@index([resuelto])
   @@map("auditoria")
+}
+
+model NotificationMetricEvent {
+  id              String              @id @default(uuid())
+  channel         NotificationChannel
+  template        String?
+  recipientHash   String
+  correlationId   String
+  status          MetricStatus
+  sentAt          DateTime
+  providerAckAt   DateTime?
+  deliveredAt     DateTime?
+  latencyMs       Int?
+  errorCode       String?
+  errorMessage    String?             @db.Text
+  retryCount      Int                 @default(0)
+  experimentRunId String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  experimentRun ExperimentRun? @relation(fields: [experimentRunId], references: [id], onDelete: SetNull)
+
+  @@index([channel, createdAt])
+  @@index([experimentRunId])
+  @@index([status, createdAt])
+  @@index([correlationId])
+  @@map("notification_metric_events")
+}
+
+model ExperimentRun {
+  id            String              @id @default(uuid())
+  name          String
+  description   String?
+  scenario      ExperimentScenario
+  channelTarget NotificationChannel
+  totalMessages Int
+  concurrency   Int
+  ratePerSec    Int?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  status        ExperimentStatus    @default(CREATED)
+  summaryJson   Json?
+  createdBy     String?
+  createdAt     DateTime            @default(now())
+
+  metricEvents NotificationMetricEvent[]
+  seriesPoints ExperimentSeriesPoint[]
+
+  @@index([status, createdAt])
+  @@index([scenario])
+  @@map("experiment_runs")
+}
+
+model ExperimentSeriesPoint {
+  id              String   @id @default(uuid())
+  experimentRunId String
+  tOffsetSec      Int
+  sentCount       Int      @default(0)
+  successCount    Int      @default(0)
+  failCount       Int      @default(0)
+  p95LatencyMs    Int?
+  createdAt       DateTime @default(now())
+
+  experimentRun ExperimentRun @relation(fields: [experimentRunId], references: [id], onDelete: Cascade)
+
+  @@index([experimentRunId, tOffsetSec])
+  @@map("experiment_series_points")
 }

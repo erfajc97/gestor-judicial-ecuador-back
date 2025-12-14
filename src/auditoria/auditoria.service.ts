@@ -85,8 +85,7 @@ export class AuditoriaService {
     const limit = filtros?.limit || 50;
     const offset = filtros?.offset || 0;
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    const [data, total] = await Promise.all([
+    const [data, total] = (await Promise.all([
       // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
       (this.prisma as any).auditoria.findMany({
         where: Object.keys(where).length > 0 ? where : undefined,
@@ -100,7 +99,7 @@ export class AuditoriaService {
       (this.prisma as any).auditoria.count({
         where: Object.keys(where).length > 0 ? where : undefined,
       }),
-    ]);
+    ])) as [unknown[], number];
 
     return {
       data,
@@ -153,47 +152,51 @@ export class AuditoriaService {
   }
 
   async getEstadisticas() {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-    const total = await (this.prisma as any).auditoria.count();
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-    const noResueltos = await (this.prisma as any).auditoria.count({
-      where: { resuelto: false },
-    });
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-    const resueltos = await (this.prisma as any).auditoria.count({
-      where: { resuelto: true },
-    });
+    const total =
+      (await // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      (this.prisma as any).auditoria.count()) as number;
+    const noResueltos =
+      (await // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      (this.prisma as any).auditoria.count({
+        where: { resuelto: false },
+      })) as number;
+    const resueltos =
+      (await // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      (this.prisma as any).auditoria.count({
+        where: { resuelto: true },
+      })) as number;
 
     // Obtener conteo por tipo de error
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-    const porTipo = await (this.prisma as any).auditoria.groupBy({
-      by: ['tipoError'],
-      _count: {
-        tipoError: true,
-      },
-    });
+    const porTipo =
+      (await // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      (this.prisma as any).auditoria.groupBy({
+        by: ['tipoError'],
+        _count: {
+          tipoError: true,
+        },
+      })) as Array<{ tipoError: TipoError; _count: { tipoError: number } }>;
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-    const porEntidad = await (this.prisma as any).auditoria.groupBy({
-      by: ['entidad'],
-      _count: {
-        entidad: true,
-      },
-    });
+    const porEntidad =
+      (await // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      (this.prisma as any).auditoria.groupBy({
+        by: ['entidad'],
+        _count: {
+          entidad: true,
+        },
+      })) as Array<{ entidad: string; _count: { entidad: number } }>;
 
     return {
       total,
       noResueltos,
       resueltos,
-      porTipo: porTipo.map((item: { tipoError: TipoError; _count: { tipoError: number } }) => ({
+      porTipo: porTipo.map((item) => ({
         tipoError: item.tipoError,
         cantidad: item._count.tipoError,
       })),
-      porEntidad: porEntidad.map((item: { entidad: string; _count: { entidad: number } }) => ({
+      porEntidad: porEntidad.map((item) => ({
         entidad: item.entidad,
         cantidad: item._count.entidad,
       })),
     };
   }
 }
-

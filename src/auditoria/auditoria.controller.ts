@@ -7,7 +7,11 @@ import {
   Patch,
   Query,
 } from '@nestjs/common';
-import { AuditoriaService, RegistrarErrorDto, FiltrosAuditoria } from './auditoria.service';
+import {
+  AuditoriaService,
+  RegistrarErrorDto,
+  FiltrosAuditoria,
+} from './auditoria.service';
 import { TipoError } from '../../generated/prisma/enums';
 
 @Controller('auditoria')
@@ -58,4 +62,3 @@ export class AuditoriaController {
     return this.auditoriaService.registrarError(dto);
   }
 }
-

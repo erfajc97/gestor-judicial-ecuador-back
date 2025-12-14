@@ -6,6 +6,9 @@ import { ParticipantesModule } from './participantes/participantes.module';
 import { TelegramModule } from './telegram/telegram.module';
 import { NotificacionesModule } from './notificaciones/notificaciones.module';
 import { AuditoriaModule } from './auditoria/auditoria.module';
+import { EmailModule } from './email/email.module';
+import { MetricsModule } from './metrics/metrics.module';
+import { ExperimentsModule } from './experiments/experiments.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -19,6 +22,9 @@ import { AppController } from './app.controller';
     TelegramModule,
     NotificacionesModule,
     AuditoriaModule,
+    EmailModule,
+    MetricsModule,
+    ExperimentsModule,
   ],
   controllers: [AppController],
   providers: [],
