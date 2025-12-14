@@ -14,6 +14,7 @@ async function bootstrap() {
       'http://localhost:5173',
       'http://localhost:5174',
       'https://gestor-judicial.netlify.app',
+      'https://laboratorio-gestor-judcial.netlify.app',
       process.env.FRONTEND_URL || '*',
     ],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
