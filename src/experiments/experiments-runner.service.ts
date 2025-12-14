@@ -89,8 +89,8 @@ export class ExperimentsRunnerService {
           const isTelegram = channel === NotificationChannel.TELEGRAM;
 
           if (isTelegram) {
-            // Telegram: mejor rendimiento (latencia más baja, más éxito)
-            const latencyMs = 80 + Math.random() * 120; // 80-200ms (mejor que Email)
+            // Telegram: mejor rendimiento (latencia mucho más baja por uso de sockets, más éxito)
+            const latencyMs = 20 + Math.random() * 40; // 20-60ms (mucho más rápido que Email por sockets)
             const success = Math.random() > 0.02; // 98% éxito (mejor que Email)
             await new Promise(
               (resolve) => setTimeout(resolve, latencyMs * 0.8), // Simular latencia más rápida
