@@ -60,6 +60,12 @@ export class EmailService {
 
   async sendEmail(dto: SendEmailDto): Promise<SendEmailResult> {
     if (this.stubMode || !this.transporter) {
+      this.logger.warn(
+        `[STUB MODE] Email NO enviado realmente a ${dto.to}. Modo stub activo o transporter no disponible.`,
+      );
+      this.logger.warn(
+        `[STUB MODE] Verifique configuración SMTP: SMTP_HOST=${this.configService.get<string>('SMTP_HOST') || 'NO CONFIGURADO'}, SMTP_USER=${this.configService.get<string>('SMTP_USER') || 'NO CONFIGURADO'}`,
+      );
       return this.sendEmailStub(dto);
     }
 
@@ -77,14 +83,18 @@ export class EmailService {
         text: dto.text,
       };
 
+      this.logger.log(
+        `[SMTP] Intentando enviar email a ${dto.to} desde ${smtpFrom} con asunto: ${dto.subject}`,
+      );
+
       const startTime = Date.now();
       const info = await this.transporter.sendMail(mailOptions);
       const latencyMs = Date.now() - startTime;
 
       const messageId = info.messageId || `smtp-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
-      this.logger.debug(
-        `Email enviado a ${dto.to}: ${dto.subject} (ID: ${messageId}, Latency: ${latencyMs}ms)`,
+      this.logger.log(
+        `[SMTP] ✅ Email enviado exitosamente a ${dto.to} (messageId: ${messageId}, latency: ${latencyMs}ms, response: ${JSON.stringify(info.response)})`,
       );
 
       return {
@@ -98,7 +108,22 @@ export class EmailService {
         ? String(error.code)
         : 'SMTP_ERROR';
 
-      this.logger.error(`Error enviando email a ${dto.to}:`, errorMessage);
+      this.logger.error(
+        `[SMTP] ❌ ERROR al enviar email a ${dto.to}: ${errorCode} - ${errorMessage}`,
+      );
+      if (error instanceof Error && error.stack) {
+        this.logger.error(`[SMTP] Stack trace: ${error.stack}`);
+      }
+      if (error instanceof Error && 'response' in error) {
+        this.logger.error(
+          `[SMTP] Respuesta del servidor: ${JSON.stringify((error as any).response)}`,
+        );
+      }
+      if (error instanceof Error && 'command' in error) {
+        this.logger.error(
+          `[SMTP] Comando fallido: ${JSON.stringify((error as any).command)}`,
+        );
+      }
 
       return {
         success: false,

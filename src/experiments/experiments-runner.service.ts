@@ -182,13 +182,16 @@ export class ExperimentsRunnerService {
         if (this.emailService.isStubMode()) {
           const errorMsg =
             'EmailService está en modo STUB. Los emails no se enviarán realmente. Configure SMTP correctamente.';
-          this.logger.warn(
-            `Advertencia en mensaje ${index} del experimento ${experiment.id}: ${errorMsg}`,
+          this.logger.error(
+            `ERROR CRÍTICO en mensaje ${index} del experimento ${experiment.id}: ${errorMsg}`,
+          );
+          this.logger.error(
+            `Verifique que SMTP_HOST, SMTP_USER, SMTP_PASS estén configurados en las variables de entorno`,
           );
         }
 
-        this.logger.debug(
-          `Enviando email ${index + 1}/${experiment.totalMessages} del experimento ${experiment.id} a ${experimentEmailTo}`,
+        this.logger.log(
+          `[EMAIL] Enviando email ${index + 1}/${experiment.totalMessages} del experimento ${experiment.id} a ${experimentEmailTo}`,
         );
 
         const emailResult = await this.emailService.sendEmail({
@@ -206,8 +209,8 @@ export class ExperimentsRunnerService {
             providerAckAt,
             latencyMs,
           });
-          this.logger.debug(
-            `Email ${index + 1} enviado exitosamente (latency: ${latencyMs}ms)`,
+          this.logger.log(
+            `[EMAIL] ✅ Email ${index + 1} enviado exitosamente a ${experimentEmailTo} (messageId: ${emailResult.messageId}, latency: ${latencyMs}ms)`,
           );
           return {
             success: true,
@@ -216,12 +219,16 @@ export class ExperimentsRunnerService {
           };
         } else {
           const errorMsg = emailResult.errorMessage || 'Unknown error';
-          this.logger.warn(
-            `Email ${index + 1} falló: ${emailResult.errorCode || 'EMAIL_ERROR'} - ${errorMsg}`,
+          const errorCode = emailResult.errorCode || 'EMAIL_ERROR';
+          this.logger.error(
+            `[EMAIL] ❌ Email ${index + 1} FALLÓ al enviar a ${experimentEmailTo}: ${errorCode} - ${errorMsg}`,
+          );
+          this.logger.error(
+            `[EMAIL] Detalles del error: código=${errorCode}, mensaje=${errorMsg}`,
           );
           await this.metricsRecorder.updateToFailed(
             correlationId,
-            emailResult.errorCode || 'EMAIL_ERROR',
+            errorCode,
             errorMsg,
           );
           return { success: false };
@@ -256,8 +263,8 @@ export class ExperimentsRunnerService {
           return { success: false };
         }
 
-        this.logger.debug(
-          `Enviando mensaje Telegram ${index + 1}/${experiment.totalMessages} del experimento ${experiment.id} a chat ${experimentChatId}`,
+        this.logger.log(
+          `[TELEGRAM] Enviando mensaje ${index + 1}/${experiment.totalMessages} del experimento ${experiment.id} a chat ${experimentChatId}`,
         );
 
         const message = `🧪 <b>Test ${experiment.name}</b>\n\nEste es un mensaje de prueba del experimento.\nMensaje #${index + 1} de ${experiment.totalMessages}`;
@@ -276,8 +283,8 @@ export class ExperimentsRunnerService {
             providerAckAt,
             latencyMs,
           });
-          this.logger.debug(
-            `Mensaje Telegram ${index + 1} enviado exitosamente (latency: ${latencyMs}ms, messageId: ${telegramResult.messageId})`,
+          this.logger.log(
+            `[TELEGRAM] ✅ Mensaje ${index + 1} enviado exitosamente a chat ${experimentChatId} (messageId: ${telegramResult.messageId}, latency: ${latencyMs}ms)`,
           );
           return {
             success: true,
@@ -286,7 +293,9 @@ export class ExperimentsRunnerService {
           };
         } else {
           const errorMsg = 'Error al enviar mensaje a Telegram';
-          this.logger.warn(`Mensaje Telegram ${index + 1} falló: ${errorMsg}`);
+          this.logger.error(
+            `[TELEGRAM] ❌ Mensaje ${index + 1} FALLÓ al enviar a chat ${experimentChatId}: ${errorMsg}`,
+          );
           await this.metricsRecorder.updateToFailed(
             correlationId,
             'TELEGRAM_SEND_ERROR',
@@ -407,10 +416,17 @@ export class ExperimentsRunnerService {
               }
             } else {
               // Enviar a ambos canales en paralelo (real)
+              this.logger.log(
+                `[BOTH] Enviando mensaje ${index + 1}/${experiment.totalMessages} a AMBOS canales (EMAIL y TELEGRAM) en paralelo`,
+              );
               const [emailResult, telegramResult] = await Promise.all([
                 sendEmailMessage(index, emailCorrelationId, sentAt),
                 sendTelegramMessage(index, telegramCorrelationId, sentAt),
               ]);
+
+              this.logger.log(
+                `[BOTH] Resultado mensaje ${index + 1}: EMAIL=${emailResult.success ? '✅' : '❌'}, TELEGRAM=${telegramResult.success ? '✅' : '❌'}`,
+              );
 
               // Actualizar contadores (cada mensaje BOTH = 2 envíos)
               sentCount += 2;

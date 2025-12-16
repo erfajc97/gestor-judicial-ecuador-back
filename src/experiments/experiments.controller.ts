@@ -8,6 +8,8 @@ import {
   Query,
   Res,
   HttpStatus,
+  HttpCode,
+  HttpException,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { ExperimentsService } from './experiments.service';
@@ -98,8 +100,21 @@ export class ExperimentsController {
   }
 
   @Delete(':id')
+  @HttpCode(HttpStatus.OK)
   async delete(@Param('id') id: string) {
-    await this.experimentsService.delete(id);
-    return { message: 'Experimento eliminado', id };
+    try {
+      await this.experimentsService.delete(id);
+      return { message: 'Experimento eliminado', id };
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      const errorMessage =
+        error instanceof Error ? error.message : 'Error desconocido';
+      throw new HttpException(
+        { message: errorMessage, id },
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 }
