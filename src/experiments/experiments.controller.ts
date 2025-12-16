@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Body,
   Param,
   Query,
@@ -94,5 +95,11 @@ export class ExperimentsController {
       );
       res.status(HttpStatus.OK).json(experiment);
     }
+  }
+
+  @Delete(':id')
+  async delete(@Param('id') id: string) {
+    await this.experimentsService.delete(id);
+    return { message: 'Experimento eliminado', id };
   }
 }

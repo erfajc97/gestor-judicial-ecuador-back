@@ -35,6 +35,77 @@ export class ExperimentsRunnerService {
   ) {}
 
   /**
+   * Valida la configuración requerida para ejecutar un experimento
+   */
+  validateExperimentConfig(
+    experiment: ExperimentRun,
+    dryRun: boolean = false,
+  ): void {
+    // En modo dryRun no se necesita validar configuración real
+    if (dryRun) {
+      this.logger.log(
+        `Modo dryRun activado, omitiendo validación de configuración para experimento ${experiment.id}`,
+      );
+      return;
+    }
+
+    const target = experiment.channelTarget;
+    const needsEmail =
+      target === NotificationChannel.EMAIL ||
+      target === NotificationChannel.BOTH;
+    const needsTelegram =
+      target === NotificationChannel.TELEGRAM ||
+      target === NotificationChannel.BOTH;
+
+    const missing: string[] = [];
+
+    if (needsEmail) {
+      const experimentEmailTo = this.configService.get<string>(
+        'EXPERIMENT_EMAIL_TO',
+      );
+      const smtpHost = this.configService.get<string>('SMTP_HOST');
+      const isStubMode = this.emailService.isStubMode();
+
+      if (!experimentEmailTo || experimentEmailTo.trim() === '') {
+        missing.push('EXPERIMENT_EMAIL_TO');
+      }
+      if (!smtpHost || smtpHost.trim() === '') {
+        missing.push('SMTP_HOST');
+      }
+      if (isStubMode) {
+        this.logger.warn(
+          `EmailService está en modo STUB. Los emails no se enviarán realmente.`,
+        );
+      }
+    }
+
+    if (needsTelegram) {
+      const experimentChatId = this.configService.get<string>(
+        'EXPERIMENT_TELEGRAM_CHAT_ID',
+      );
+      const telegramToken =
+        this.configService.get<string>('TELEGRAM_BOT_TOKEN');
+
+      if (!experimentChatId || experimentChatId.trim() === '') {
+        missing.push('EXPERIMENT_TELEGRAM_CHAT_ID');
+      }
+      if (!telegramToken || telegramToken.trim() === '') {
+        missing.push('TELEGRAM_BOT_TOKEN');
+      }
+    }
+
+    if (missing.length > 0) {
+      const errorMessage = `Configuración faltante para el experimento (${target}): ${missing.join(', ')}. Por favor configure estas variables de entorno antes de ejecutar el experimento.`;
+      this.logger.error(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    this.logger.log(
+      `Configuración validada correctamente para experimento ${experiment.id} (${target})`,
+    );
+  }
+
+  /**
    * Ejecuta un experimento completo
    */
   async runExperiment(
@@ -42,302 +113,584 @@ export class ExperimentsRunnerService {
     dryRun: boolean,
   ): Promise<void> {
     const startTime = Date.now();
-    const limit = pLimit(experiment.concurrency);
-    const ratePerSec = experiment.ratePerSec || 10;
-    const delayBetweenBatches = 1000 / ratePerSec; // ms entre mensajes
+    const EXPERIMENT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutos máximo
 
-    this.logger.log(
-      `Iniciando experimento ${experiment.id}: ${experiment.totalMessages} mensajes, concurrencia ${experiment.concurrency}, rate ${ratePerSec}/s, dryRun=${dryRun}`,
-    );
-
-    const tasks: Array<Promise<void>> = [];
+    // Variables de contadores (necesarias en catch también)
     let sentCount = 0;
     let successCount = 0;
     let failCount = 0;
     const latencies: number[] = [];
-    let lastSeriesUpdate = Date.now();
-    const seriesInterval = 1000; // 1 segundo
 
-    // Función para enviar un mensaje
-    const sendMessage = async (index: number): Promise<void> => {
-      try {
-        const recipientHash = this.hashRecipient(
-          `test-${experiment.id}-${index}`,
-        );
-        const template = `experiment-${experiment.scenario}`;
-        const sentAt = new Date();
+    try {
+      // Validar configuración al inicio (solo si no es dryRun)
+      if (!dryRun) {
+        this.validateExperimentConfig(experiment, dryRun);
+      }
 
-        // Registrar evento PENDING
-        const channel = this.getChannelForTarget(
-          experiment.channelTarget,
-          index,
+      const limit = pLimit(experiment.concurrency);
+      const ratePerSec = experiment.ratePerSec || 10;
+      const delayBetweenBatches = 1000 / ratePerSec; // ms entre mensajes
+
+      this.logger.log(
+        `Iniciando experimento ${experiment.id}: ${experiment.totalMessages} mensajes, concurrencia ${experiment.concurrency}, rate ${ratePerSec}/s, dryRun=${dryRun}`,
+      );
+
+      // Configurar timeout para evitar que el experimento se cuelgue
+      const timeoutPromise = new Promise<void>((_, reject) => {
+        setTimeout(() => {
+          reject(
+            new Error(
+              `Experimento ${experiment.id} excedió el tiempo límite de ${EXPERIMENT_TIMEOUT_MS / 1000 / 60} minutos`,
+            ),
+          );
+        }, EXPERIMENT_TIMEOUT_MS);
+      });
+
+      const tasks: Array<Promise<void>> = [];
+      let lastSeriesUpdate = Date.now();
+      const seriesInterval = 1000; // 1 segundo
+
+      // Función auxiliar para enviar email
+      const sendEmailMessage = async (
+        index: number,
+        correlationId: string,
+        sentAt: Date,
+      ): Promise<{
+        success: boolean;
+        messageId?: string;
+        latencyMs?: number;
+      }> => {
+        const experimentEmailTo = this.configService.get<string>(
+          'EXPERIMENT_EMAIL_TO',
         );
-        const correlationId = await this.metricsRecorder.recordPendingEvent({
-          channel,
-          template,
-          recipientHash,
-          experimentRunId: experiment.id,
+
+        if (!experimentEmailTo || experimentEmailTo.trim() === '') {
+          const errorMsg =
+            'EXPERIMENT_EMAIL_TO no está configurado. No se puede enviar email real sin una dirección de destino válida.';
+          this.logger.error(
+            `Error en mensaje ${index} del experimento ${experiment.id}: ${errorMsg}`,
+          );
+          await this.metricsRecorder.updateToFailed(
+            correlationId,
+            'EMAIL_CONFIG_ERROR',
+            errorMsg,
+          );
+          return { success: false };
+        }
+
+        // Verificar que el servicio de email no esté en modo stub
+        if (this.emailService.isStubMode()) {
+          const errorMsg =
+            'EmailService está en modo STUB. Los emails no se enviarán realmente. Configure SMTP correctamente.';
+          this.logger.warn(
+            `Advertencia en mensaje ${index} del experimento ${experiment.id}: ${errorMsg}`,
+          );
+        }
+
+        this.logger.debug(
+          `Enviando email ${index + 1}/${experiment.totalMessages} del experimento ${experiment.id} a ${experimentEmailTo}`,
+        );
+
+        const emailResult = await this.emailService.sendEmail({
+          to: experimentEmailTo,
+          subject: `Test ${experiment.name} - Mensaje ${index + 1}`,
+          html: `<p>Este es un mensaje de prueba del experimento "${experiment.name}".<br/>Mensaje #${index + 1} de ${experiment.totalMessages}</p>`,
         });
 
-        let result: {
-          success: boolean;
-          messageId?: string;
-          latencyMs?: number;
-        };
+        if (emailResult.success && emailResult.messageId) {
+          const providerAckAt = new Date();
+          const latencyMs = providerAckAt.getTime() - sentAt.getTime();
+          await this.metricsRecorder.updateToAcked({
+            correlationId,
+            status: MetricStatus.ACKED,
+            providerAckAt,
+            latencyMs,
+          });
+          this.logger.debug(
+            `Email ${index + 1} enviado exitosamente (latency: ${latencyMs}ms)`,
+          );
+          return {
+            success: true,
+            messageId: emailResult.messageId,
+            latencyMs,
+          };
+        } else {
+          const errorMsg = emailResult.errorMessage || 'Unknown error';
+          this.logger.warn(
+            `Email ${index + 1} falló: ${emailResult.errorCode || 'EMAIL_ERROR'} - ${errorMsg}`,
+          );
+          await this.metricsRecorder.updateToFailed(
+            correlationId,
+            emailResult.errorCode || 'EMAIL_ERROR',
+            errorMsg,
+          );
+          return { success: false };
+        }
+      };
 
-        if (dryRun) {
-          // Modo dry-run: simular envío con métricas diferenciadas
-          // Telegram siempre gana: menor latencia y mayor tasa de éxito
-          const isTelegram = channel === NotificationChannel.TELEGRAM;
+      // Función auxiliar para enviar telegram
+      const sendTelegramMessage = async (
+        index: number,
+        correlationId: string,
+        sentAt: Date,
+      ): Promise<{
+        success: boolean;
+        messageId?: string;
+        latencyMs?: number;
+      }> => {
+        const experimentChatId = this.configService.get<string>(
+          'EXPERIMENT_TELEGRAM_CHAT_ID',
+        );
 
-          if (isTelegram) {
-            // Telegram: mejor rendimiento (latencia mucho más baja por uso de sockets, más éxito)
-            const latencyMs = 20 + Math.random() * 40; // 20-60ms (mucho más rápido que Email por sockets)
-            const success = Math.random() > 0.02; // 98% éxito (mejor que Email)
-            await new Promise(
-              (resolve) => setTimeout(resolve, latencyMs * 0.8), // Simular latencia más rápida
-            );
+        if (!experimentChatId || experimentChatId.trim() === '') {
+          const errorMsg =
+            'EXPERIMENT_TELEGRAM_CHAT_ID no está configurado. No se puede enviar mensaje real sin un chat ID válido.';
+          this.logger.error(
+            `Error en mensaje ${index} del experimento ${experiment.id}: ${errorMsg}`,
+          );
+          await this.metricsRecorder.updateToFailed(
+            correlationId,
+            'TELEGRAM_CONFIG_ERROR',
+            errorMsg,
+          );
+          return { success: false };
+        }
 
-            if (success) {
-              await this.metricsRecorder.updateToAcked({
-                correlationId,
-                status: MetricStatus.ACKED,
-                providerAckAt: new Date(),
-                latencyMs,
+        this.logger.debug(
+          `Enviando mensaje Telegram ${index + 1}/${experiment.totalMessages} del experimento ${experiment.id} a chat ${experimentChatId}`,
+        );
+
+        const message = `🧪 <b>Test ${experiment.name}</b>\n\nEste es un mensaje de prueba del experimento.\nMensaje #${index + 1} de ${experiment.totalMessages}`;
+
+        const telegramResult = await this.telegramService.sendMessage(
+          experimentChatId,
+          message,
+        );
+
+        if (telegramResult.success && telegramResult.messageId) {
+          const providerAckAt = new Date();
+          const latencyMs = providerAckAt.getTime() - sentAt.getTime();
+          await this.metricsRecorder.updateToAcked({
+            correlationId,
+            status: MetricStatus.ACKED,
+            providerAckAt,
+            latencyMs,
+          });
+          this.logger.debug(
+            `Mensaje Telegram ${index + 1} enviado exitosamente (latency: ${latencyMs}ms, messageId: ${telegramResult.messageId})`,
+          );
+          return {
+            success: true,
+            messageId: String(telegramResult.messageId),
+            latencyMs,
+          };
+        } else {
+          const errorMsg = 'Error al enviar mensaje a Telegram';
+          this.logger.warn(`Mensaje Telegram ${index + 1} falló: ${errorMsg}`);
+          await this.metricsRecorder.updateToFailed(
+            correlationId,
+            'TELEGRAM_SEND_ERROR',
+            errorMsg,
+          );
+          return { success: false };
+        }
+      };
+
+      // Función para enviar un mensaje
+      const sendMessage = async (index: number): Promise<void> => {
+        try {
+          const recipientHash = this.hashRecipient(
+            `test-${experiment.id}-${index}`,
+          );
+          const template = `experiment-${experiment.scenario}`;
+          const sentAt = new Date();
+
+          // Si es BOTH, enviar a ambos canales en paralelo
+          if (experiment.channelTarget === NotificationChannel.BOTH) {
+            // Crear dos correlationIds, uno por canal
+            const emailCorrelationId =
+              await this.metricsRecorder.recordPendingEvent({
+                channel: NotificationChannel.EMAIL,
+                template,
+                recipientHash: `${recipientHash}-email`,
+                experimentRunId: experiment.id,
               });
-              result = {
-                success: true,
-                messageId: `telegram-dry-${index}`,
-                latencyMs,
-              };
+
+            const telegramCorrelationId =
+              await this.metricsRecorder.recordPendingEvent({
+                channel: NotificationChannel.TELEGRAM,
+                template,
+                recipientHash: `${recipientHash}-telegram`,
+                experimentRunId: experiment.id,
+              });
+
+            if (dryRun) {
+              // Simular ambos envíos en paralelo
+              const [emailResult, telegramResult] = await Promise.all([
+                (async () => {
+                  // Email: peor rendimiento (latencia más alta, menos éxito)
+                  const latencyMs = 150 + Math.random() * 150; // 150-300ms
+                  const success = Math.random() > 0.08; // 92% éxito
+                  await new Promise((resolve) =>
+                    setTimeout(resolve, latencyMs * 1.2),
+                  );
+
+                  if (success) {
+                    await this.metricsRecorder.updateToAcked({
+                      correlationId: emailCorrelationId,
+                      status: MetricStatus.ACKED,
+                      providerAckAt: new Date(),
+                      latencyMs,
+                    });
+                    return {
+                      success: true,
+                      messageId: `email-dry-${index}`,
+                      latencyMs,
+                    };
+                  } else {
+                    await this.metricsRecorder.updateToFailed(
+                      emailCorrelationId,
+                      'DRY_RUN_ERROR',
+                      'Simulated error',
+                    );
+                    return { success: false };
+                  }
+                })(),
+                (async () => {
+                  // Telegram: mejor rendimiento (latencia mucho más baja, más éxito)
+                  const latencyMs = 20 + Math.random() * 40; // 20-60ms
+                  const success = Math.random() > 0.02; // 98% éxito
+                  await new Promise((resolve) =>
+                    setTimeout(resolve, latencyMs * 0.8),
+                  );
+
+                  if (success) {
+                    await this.metricsRecorder.updateToAcked({
+                      correlationId: telegramCorrelationId,
+                      status: MetricStatus.ACKED,
+                      providerAckAt: new Date(),
+                      latencyMs,
+                    });
+                    return {
+                      success: true,
+                      messageId: `telegram-dry-${index}`,
+                      latencyMs,
+                    };
+                  } else {
+                    await this.metricsRecorder.updateToFailed(
+                      telegramCorrelationId,
+                      'DRY_RUN_ERROR',
+                      'Simulated error',
+                    );
+                    return { success: false };
+                  }
+                })(),
+              ]);
+
+              // Actualizar contadores (cada mensaje BOTH = 2 envíos)
+              sentCount += 2;
+              if (emailResult.success) {
+                successCount++;
+                if (emailResult.latencyMs) {
+                  latencies.push(emailResult.latencyMs);
+                }
+              } else {
+                failCount++;
+              }
+              if (telegramResult.success) {
+                successCount++;
+                if (telegramResult.latencyMs) {
+                  latencies.push(telegramResult.latencyMs);
+                }
+              } else {
+                failCount++;
+              }
             } else {
-              await this.metricsRecorder.updateToFailed(
-                correlationId,
-                'DRY_RUN_ERROR',
-                'Simulated error',
-              );
-              result = { success: false };
+              // Enviar a ambos canales en paralelo (real)
+              const [emailResult, telegramResult] = await Promise.all([
+                sendEmailMessage(index, emailCorrelationId, sentAt),
+                sendTelegramMessage(index, telegramCorrelationId, sentAt),
+              ]);
+
+              // Actualizar contadores (cada mensaje BOTH = 2 envíos)
+              sentCount += 2;
+              if (emailResult.success) {
+                successCount++;
+                if (emailResult.latencyMs) {
+                  latencies.push(emailResult.latencyMs);
+                }
+              } else {
+                failCount++;
+              }
+              if (telegramResult.success) {
+                successCount++;
+                if (telegramResult.latencyMs) {
+                  latencies.push(telegramResult.latencyMs);
+                }
+              } else {
+                failCount++;
+              }
             }
           } else {
-            // Email: peor rendimiento (latencia más alta, menos éxito)
-            const latencyMs = 150 + Math.random() * 150; // 150-300ms (peor que Telegram)
-            const success = Math.random() > 0.08; // 92% éxito (peor que Telegram)
-            await new Promise(
-              (resolve) => setTimeout(resolve, latencyMs * 1.2), // Simular latencia más lenta
+            // Lógica para EMAIL o TELEGRAM individual
+            const channel = this.getChannelForTarget(
+              experiment.channelTarget,
+              index,
+            );
+            const correlationId = await this.metricsRecorder.recordPendingEvent(
+              {
+                channel,
+                template,
+                recipientHash,
+                experimentRunId: experiment.id,
+              },
             );
 
-            if (success) {
-              await this.metricsRecorder.updateToAcked({
-                correlationId,
-                status: MetricStatus.ACKED,
-                providerAckAt: new Date(),
-                latencyMs,
-              });
-              result = {
-                success: true,
-                messageId: `email-dry-${index}`,
-                latencyMs,
-              };
-            } else {
-              await this.metricsRecorder.updateToFailed(
-                correlationId,
-                'DRY_RUN_ERROR',
-                'Simulated error',
-              );
-              result = { success: false };
-            }
-          }
-        } else {
-          // Envío real - usar el canal determinado por getChannelForTarget
-          if (channel === NotificationChannel.EMAIL) {
-            // Obtener email de prueba desde variables de entorno o usar default
-            const experimentEmailTo =
-              this.configService.get<string>('EXPERIMENT_EMAIL_TO') ||
-              `test-${index}@example.com`;
+            let result: {
+              success: boolean;
+              messageId?: string;
+              latencyMs?: number;
+            };
 
-            const emailResult = await this.emailService.sendEmail({
-              to: experimentEmailTo,
-              subject: `Test ${experiment.name} - Mensaje ${index + 1}`,
-              html: `<p>Este es un mensaje de prueba del experimento "${experiment.name}".<br/>Mensaje #${index + 1} de ${experiment.totalMessages}</p>`,
-            });
+            if (dryRun) {
+              // Modo dry-run: simular envío con métricas diferenciadas
+              const isTelegram = channel === NotificationChannel.TELEGRAM;
 
-            if (emailResult.success && emailResult.messageId) {
-              const providerAckAt = new Date();
-              const latencyMs = providerAckAt.getTime() - sentAt.getTime();
-              await this.metricsRecorder.updateToAcked({
-                correlationId,
-                status: MetricStatus.ACKED,
-                providerAckAt,
-                latencyMs,
-              });
-              result = {
-                success: true,
-                messageId: emailResult.messageId,
-                latencyMs,
-              };
-            } else {
-              await this.metricsRecorder.updateToFailed(
-                correlationId,
-                emailResult.errorCode || 'EMAIL_ERROR',
-                emailResult.errorMessage || 'Unknown error',
-              );
-              result = { success: false };
-            }
-          } else if (channel === NotificationChannel.TELEGRAM) {
-            // Obtener chatId de prueba desde variables de entorno
-            const experimentChatId = this.configService.get<string>(
-              'EXPERIMENT_TELEGRAM_CHAT_ID',
-            );
+              if (isTelegram) {
+                // Telegram: mejor rendimiento (latencia mucho más baja por uso de sockets, más éxito)
+                const latencyMs = 20 + Math.random() * 40; // 20-60ms (mucho más rápido que Email por sockets)
+                const success = Math.random() > 0.02; // 98% éxito (mejor que Email)
+                await new Promise(
+                  (resolve) => setTimeout(resolve, latencyMs * 0.8), // Simular latencia más rápida
+                );
 
-            if (!experimentChatId) {
-              this.logger.warn(
-                'EXPERIMENT_TELEGRAM_CHAT_ID no configurado, no se puede enviar mensaje real',
-              );
-              await this.metricsRecorder.updateToFailed(
-                correlationId,
-                'TELEGRAM_CONFIG_ERROR',
-                'EXPERIMENT_TELEGRAM_CHAT_ID no configurado',
-              );
-              result = { success: false };
-            } else {
-              const message = `🧪 <b>Test ${experiment.name}</b>\n\nEste es un mensaje de prueba del experimento.\nMensaje #${index + 1} de ${experiment.totalMessages}`;
-
-              const telegramResult = await this.telegramService.sendMessage(
-                experimentChatId,
-                message,
-              );
-
-              if (telegramResult.success && telegramResult.messageId) {
-                const providerAckAt = new Date();
-                const latencyMs = providerAckAt.getTime() - sentAt.getTime();
-                await this.metricsRecorder.updateToAcked({
-                  correlationId,
-                  status: MetricStatus.ACKED,
-                  providerAckAt,
-                  latencyMs,
-                });
-                result = {
-                  success: true,
-                  messageId: String(telegramResult.messageId),
-                  latencyMs,
-                };
+                if (success) {
+                  await this.metricsRecorder.updateToAcked({
+                    correlationId,
+                    status: MetricStatus.ACKED,
+                    providerAckAt: new Date(),
+                    latencyMs,
+                  });
+                  result = {
+                    success: true,
+                    messageId: `telegram-dry-${index}`,
+                    latencyMs,
+                  };
+                } else {
+                  await this.metricsRecorder.updateToFailed(
+                    correlationId,
+                    'DRY_RUN_ERROR',
+                    'Simulated error',
+                  );
+                  result = { success: false };
+                }
               } else {
+                // Email: peor rendimiento (latencia más alta, menos éxito)
+                const latencyMs = 150 + Math.random() * 150; // 150-300ms (peor que Telegram)
+                const success = Math.random() > 0.08; // 92% éxito (peor que Telegram)
+                await new Promise(
+                  (resolve) => setTimeout(resolve, latencyMs * 1.2), // Simular latencia más lenta
+                );
+
+                if (success) {
+                  await this.metricsRecorder.updateToAcked({
+                    correlationId,
+                    status: MetricStatus.ACKED,
+                    providerAckAt: new Date(),
+                    latencyMs,
+                  });
+                  result = {
+                    success: true,
+                    messageId: `email-dry-${index}`,
+                    latencyMs,
+                  };
+                } else {
+                  await this.metricsRecorder.updateToFailed(
+                    correlationId,
+                    'DRY_RUN_ERROR',
+                    'Simulated error',
+                  );
+                  result = { success: false };
+                }
+              }
+
+              // Actualizar contadores (solo para canales individuales)
+              sentCount++;
+              if (result.success) {
+                successCount++;
+                if (result.latencyMs) {
+                  latencies.push(result.latencyMs);
+                }
+              } else {
+                failCount++;
+              }
+            } else {
+              // Envío real - usar el canal determinado por getChannelForTarget
+              if (channel === NotificationChannel.EMAIL) {
+                result = await sendEmailMessage(index, correlationId, sentAt);
+              } else if (channel === NotificationChannel.TELEGRAM) {
+                result = await sendTelegramMessage(
+                  index,
+                  correlationId,
+                  sentAt,
+                );
+              } else {
+                // Canal no reconocido
                 await this.metricsRecorder.updateToFailed(
                   correlationId,
-                  'TELEGRAM_SEND_ERROR',
-                  'Error al enviar mensaje a Telegram',
+                  'UNKNOWN_CHANNEL',
+                  `Canal desconocido: ${channel}`,
                 );
                 result = { success: false };
               }
+
+              // Actualizar contadores (solo para canales individuales, BOTH ya actualiza arriba)
+              sentCount++;
+              if (result.success) {
+                successCount++;
+                if (result.latencyMs) {
+                  latencies.push(result.latencyMs);
+                }
+              } else {
+                failCount++;
+              }
             }
           }
-        }
 
-        // Actualizar contadores
-        sentCount++;
-        if (result.success) {
-          successCount++;
-          if (result.latencyMs) {
-            latencies.push(result.latencyMs);
+          // Agregar punto de serie cada segundo
+          const now = Date.now();
+          if (now - lastSeriesUpdate >= seriesInterval) {
+            await this.addSeriesPoint(
+              experiment.id,
+              sentCount,
+              successCount,
+              failCount,
+              latencies,
+            );
+            lastSeriesUpdate = now;
           }
-        } else {
+        } catch (error) {
+          this.logger.error(
+            `Error enviando mensaje ${index} en experimento ${experiment.id}:`,
+            error,
+          );
           failCount++;
         }
+      };
 
-        // Agregar punto de serie cada segundo
-        const now = Date.now();
-        if (now - lastSeriesUpdate >= seriesInterval) {
-          await this.addSeriesPoint(
-            experiment.id,
-            sentCount,
-            successCount,
-            failCount,
-            latencies,
-          );
-          lastSeriesUpdate = now;
-        }
-      } catch (error) {
-        this.logger.error(
-          `Error enviando mensaje ${index} en experimento ${experiment.id}:`,
-          error,
-        );
-        failCount++;
+      // Crear tareas con rate limiting
+      for (let i = 0; i < experiment.totalMessages; i++) {
+        const task = limit(async () => {
+          await sendMessage(i);
+          // Rate limiting: esperar antes del siguiente mensaje
+          if (i < experiment.totalMessages - 1) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, delayBetweenBatches),
+            );
+          }
+        });
+        tasks.push(task);
       }
-    };
 
-    // Crear tareas con rate limiting
-    for (let i = 0; i < experiment.totalMessages; i++) {
-      const task = limit(async () => {
-        await sendMessage(i);
-        // Rate limiting: esperar antes del siguiente mensaje
-        if (i < experiment.totalMessages - 1) {
-          await new Promise((resolve) =>
-            setTimeout(resolve, delayBetweenBatches),
-          );
-        }
+      // Esperar a que todas las tareas terminen o timeout
+      await Promise.race([Promise.all(tasks), timeoutPromise]);
+
+      // Agregar punto final de serie
+      await this.addSeriesPoint(
+        experiment.id,
+        sentCount,
+        successCount,
+        failCount,
+        latencies,
+      );
+
+      // Calcular summary
+      const sortedLatencies = [...latencies].sort((a, b) => a - b);
+      const p50 =
+        sortedLatencies[Math.floor(sortedLatencies.length * 0.5)] || null;
+      const p95 =
+        sortedLatencies[Math.floor(sortedLatencies.length * 0.95)] || null;
+      const p99 =
+        sortedLatencies[Math.floor(sortedLatencies.length * 0.99)] || null;
+      const avg =
+        latencies.length > 0
+          ? latencies.reduce((sum, l) => sum + l, 0) / latencies.length
+          : null;
+
+      const durationMs = Date.now() - startTime;
+      const durationSec = durationMs / 1000;
+      const throughput = durationSec > 0 ? sentCount / durationSec : 0;
+      const peakThroughput = ratePerSec; // Aproximado
+
+      const summary = {
+        totalSent: sentCount,
+        totalSuccess: successCount,
+        totalFailed: failCount,
+        successRate: sentCount > 0 ? (successCount / sentCount) * 100 : 0,
+        p50LatencyMs: p50,
+        p95LatencyMs: p95,
+        p99LatencyMs: p99,
+        avgLatencyMs: avg,
+        durationMs,
+        durationSec,
+        throughput,
+        peakThroughput,
+      };
+
+      // Actualizar experimento como DONE
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      await (this.prisma as any).experimentRun.update({
+        where: { id: experiment.id },
+        data: {
+          status: ExperimentStatus.DONE,
+          finishedAt: new Date(),
+          summaryJson: summary,
+        },
       });
-      tasks.push(task);
+
+      this.logger.log(
+        `Experimento ${experiment.id} completado exitosamente: ${successCount}/${sentCount} exitosos, ${failCount} fallidos, p95=${p95}ms, duración=${durationSec.toFixed(2)}s`,
+      );
+    } catch (error) {
+      // Asegurar que siempre se actualice el estado del experimento
+      const errorMessage =
+        error instanceof Error ? error.message : 'Error desconocido';
+      const errorStack = error instanceof Error ? error.stack : undefined;
+
+      this.logger.error(
+        `Error ejecutando experimento ${experiment.id}: ${errorMessage}`,
+        errorStack,
+      );
+
+      // Actualizar experimento como FAILED
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+        await (this.prisma as any).experimentRun.update({
+          where: { id: experiment.id },
+          data: {
+            status: ExperimentStatus.FAILED,
+            finishedAt: new Date(),
+            summaryJson: {
+              totalSent: sentCount,
+              totalSuccess: successCount,
+              totalFailed: failCount,
+              error: errorMessage,
+            },
+          },
+        });
+        this.logger.log(
+          `Experimento ${experiment.id} marcado como FAILED debido a error`,
+        );
+      } catch (updateError) {
+        this.logger.error(
+          `Error crítico: No se pudo actualizar el estado del experimento ${experiment.id} a FAILED:`,
+          updateError,
+        );
+      }
+
+      // Re-lanzar el error para que el caller pueda manejarlo si es necesario
+      throw error;
     }
-
-    // Esperar a que todas las tareas terminen
-    await Promise.all(tasks);
-
-    // Agregar punto final de serie
-    await this.addSeriesPoint(
-      experiment.id,
-      sentCount,
-      successCount,
-      failCount,
-      latencies,
-    );
-
-    // Calcular summary
-    const sortedLatencies = [...latencies].sort((a, b) => a - b);
-    const p50 =
-      sortedLatencies[Math.floor(sortedLatencies.length * 0.5)] || null;
-    const p95 =
-      sortedLatencies[Math.floor(sortedLatencies.length * 0.95)] || null;
-    const p99 =
-      sortedLatencies[Math.floor(sortedLatencies.length * 0.99)] || null;
-    const avg =
-      latencies.length > 0
-        ? latencies.reduce((sum, l) => sum + l, 0) / latencies.length
-        : null;
-
-    const durationMs = Date.now() - startTime;
-    const durationSec = durationMs / 1000;
-    const throughput = durationSec > 0 ? sentCount / durationSec : 0;
-    const peakThroughput = ratePerSec; // Aproximado
-
-    const summary = {
-      totalSent: sentCount,
-      totalSuccess: successCount,
-      totalFailed: failCount,
-      successRate: sentCount > 0 ? (successCount / sentCount) * 100 : 0,
-      p50LatencyMs: p50,
-      p95LatencyMs: p95,
-      p99LatencyMs: p99,
-      avgLatencyMs: avg,
-      durationMs,
-      durationSec,
-      throughput,
-      peakThroughput,
-    };
-
-    // Actualizar experimento como DONE
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-    await (this.prisma as any).experimentRun.update({
-      where: { id: experiment.id },
-      data: {
-        status: ExperimentStatus.DONE,
-        finishedAt: new Date(),
-        summaryJson: summary,
-      },
-    });
-
-    this.logger.log(
-      `Experimento ${experiment.id} completado: ${successCount}/${sentCount} exitosos, p95=${p95}ms`,
-    );
   }
 
   /**

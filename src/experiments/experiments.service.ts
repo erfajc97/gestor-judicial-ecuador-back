@@ -89,7 +89,26 @@ export class ExperimentsService {
     // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     const experiment = (await (this.prisma as any).experimentRun.findUnique({
       where: { id },
-    })) as { status: ExperimentStatus } | null;
+      select: {
+        id: true,
+        name: true,
+        scenario: true,
+        channelTarget: true,
+        totalMessages: true,
+        concurrency: true,
+        ratePerSec: true,
+        status: true,
+      },
+    })) as {
+      id: string;
+      name: string;
+      scenario: string;
+      channelTarget: unknown;
+      totalMessages: number;
+      concurrency: number;
+      ratePerSec: number | null;
+      status: ExperimentStatus;
+    } | null;
 
     if (!experiment) {
       throw new NotFoundException(`Experimento ${id} no encontrado`);
@@ -97,6 +116,25 @@ export class ExperimentsService {
 
     if (experiment.status === ExperimentStatus.RUNNING) {
       throw new Error('El experimento ya está en ejecución');
+    }
+
+    // Validar configuración requerida antes de iniciar (solo si no es dryRun)
+    // La validación se hace aquí para fallar rápido antes de cambiar el estado
+    // Si es dryRun, la validación se omite en el runner
+    try {
+      this.runner.validateExperimentConfig(
+        experiment as unknown as Parameters<
+          typeof this.runner.validateExperimentConfig
+        >[0],
+        dryRun ?? false,
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Error de validación';
+      this.logger.error(
+        `Validación fallida para experimento ${id}: ${errorMessage}`,
+      );
+      throw error;
     }
 
     // Actualizar estado a RUNNING
@@ -129,5 +167,63 @@ export class ExperimentsService {
           },
         });
       });
+  }
+
+  /**
+   * Elimina un experimento y todos sus datos relacionados
+   */
+  async delete(id: string): Promise<void> {
+    // Verificar que el experimento existe
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+    const experiment = (await (this.prisma as any).experimentRun.findUnique({
+      where: { id },
+      select: { id: true, status: true, name: true },
+    })) as { id: string; status: ExperimentStatus; name: string } | null;
+
+    if (!experiment) {
+      throw new NotFoundException(`Experimento ${id} no encontrado`);
+    }
+
+    // Validar que no esté en ejecución
+    if (experiment.status === ExperimentStatus.RUNNING) {
+      throw new Error(
+        'No se puede eliminar un experimento que está en ejecución. Espere a que termine o falle.',
+      );
+    }
+
+    this.logger.log(
+      `Eliminando experimento ${id} - ${experiment.name} y todos sus datos relacionados`,
+    );
+
+    // Eliminar en cascada: primero los datos relacionados, luego el experimento
+    try {
+      // Eliminar metricEvents relacionados
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      await (this.prisma as any).metricEvent.deleteMany({
+        where: { experimentRunId: id },
+      });
+
+      // Eliminar seriesPoints relacionados
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      await (this.prisma as any).experimentSeriesPoint.deleteMany({
+        where: { experimentRunId: id },
+      });
+
+      // Eliminar el experimento
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+      await (this.prisma as any).experimentRun.delete({
+        where: { id },
+      });
+
+      this.logger.log(`Experimento ${id} eliminado exitosamente`);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Error desconocido';
+      this.logger.error(
+        `Error eliminando experimento ${id}: ${errorMessage}`,
+        error,
+      );
+      throw new Error(`Error al eliminar el experimento: ${errorMessage}`);
+    }
   }
 }
