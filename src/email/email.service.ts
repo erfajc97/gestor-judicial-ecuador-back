@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import * as nodemailer from 'nodemailer';
+import type { Transporter } from 'nodemailer';
 import type { SendEmailDto, SendEmailResult } from './dto/send-email.dto';
 
 @Injectable()
@@ -7,6 +9,7 @@ export class EmailService {
   private readonly logger = new Logger(EmailService.name);
   private readonly stubMode: boolean;
   private readonly smtpEnabled: boolean;
+  private readonly transporter: Transporter | null;
 
   constructor(private configService: ConfigService) {
     // Por defecto usar modo stub, a menos que se configure SMTP
@@ -15,24 +18,94 @@ export class EmailService {
       this.configService.get<string>('SMTP_HOST') !== '';
     this.stubMode = !this.smtpEnabled;
 
+    let transporter: Transporter | null = null;
+
+    if (!this.stubMode) {
+      // Configurar transporter SMTP
+      const smtpHost = this.configService.get<string>('SMTP_HOST') || '';
+      const smtpPort = this.configService.get<number>('SMTP_PORT') || 587;
+      const smtpUser = this.configService.get<string>('SMTP_USER') || '';
+      const smtpPass = this.configService.get<string>('SMTP_PASS') || '';
+      const smtpSecure = this.configService.get<string>('SMTP_SECURE') === 'true';
+
+      try {
+        transporter = nodemailer.createTransport({
+          host: smtpHost,
+          port: smtpPort,
+          secure: smtpSecure, // true para 465, false para otros puertos
+          auth: {
+            user: smtpUser,
+            pass: smtpPass,
+          },
+        });
+
+        this.logger.log(
+          `EmailService iniciado con SMTP configurado (${smtpHost}:${smtpPort})`,
+        );
+      } catch (error) {
+        this.logger.error('Error configurando SMTP:', error);
+        this.logger.warn('EmailService volviendo a modo STUB');
+        transporter = null;
+      }
+    }
+
+    this.transporter = transporter;
+
     if (this.stubMode) {
       this.logger.log(
         'EmailService iniciado en modo STUB (no se envían emails reales)',
       );
-    } else {
-      this.logger.log('EmailService iniciado con SMTP configurado');
     }
   }
 
   async sendEmail(dto: SendEmailDto): Promise<SendEmailResult> {
-    if (this.stubMode) {
+    if (this.stubMode || !this.transporter) {
       return this.sendEmailStub(dto);
     }
 
-    // Aquí se podría integrar nodemailer u otro servicio SMTP
-    // Por ahora, si no está en modo stub pero no hay implementación, usar stub
-    this.logger.warn('SMTP configurado pero no implementado, usando modo stub');
-    return this.sendEmailStub(dto);
+    try {
+      const smtpFrom =
+        this.configService.get<string>('SMTP_FROM') ||
+        this.configService.get<string>('SMTP_USER') ||
+        'noreply@example.com';
+
+      const mailOptions = {
+        from: smtpFrom,
+        to: dto.to,
+        subject: dto.subject,
+        html: dto.html,
+        text: dto.text,
+      };
+
+      const startTime = Date.now();
+      const info = await this.transporter.sendMail(mailOptions);
+      const latencyMs = Date.now() - startTime;
+
+      const messageId = info.messageId || `smtp-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+
+      this.logger.debug(
+        `Email enviado a ${dto.to}: ${dto.subject} (ID: ${messageId}, Latency: ${latencyMs}ms)`,
+      );
+
+      return {
+        success: true,
+        messageId,
+      };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Unknown error';
+      const errorCode = error instanceof Error && 'code' in error
+        ? String(error.code)
+        : 'SMTP_ERROR';
+
+      this.logger.error(`Error enviando email a ${dto.to}:`, errorMessage);
+
+      return {
+        success: false,
+        errorCode,
+        errorMessage,
+      };
+    }
   }
 
   private async sendEmailStub(dto: SendEmailDto): Promise<SendEmailResult> {

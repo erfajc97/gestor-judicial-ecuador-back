@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { MetricsRecorderService } from '../metrics/metrics-recorder.service';
 import { EmailService } from '../email/email.service';
@@ -30,6 +31,7 @@ export class ExperimentsRunnerService {
     private metricsRecorder: MetricsRecorderService,
     private emailService: EmailService,
     private telegramService: TelegramService,
+    private configService: ConfigService,
   ) {}
 
   /**
@@ -148,10 +150,15 @@ export class ExperimentsRunnerService {
         } else {
           // Envío real - usar el canal determinado por getChannelForTarget
           if (channel === NotificationChannel.EMAIL) {
+            // Obtener email de prueba desde variables de entorno o usar default
+            const experimentEmailTo =
+              this.configService.get<string>('EXPERIMENT_EMAIL_TO') ||
+              `test-${index}@example.com`;
+
             const emailResult = await this.emailService.sendEmail({
-              to: `test-${index}@example.com`,
-              subject: `Test ${experiment.name}`,
-              html: `<p>Test message ${index}</p>`,
+              to: experimentEmailTo,
+              subject: `Test ${experiment.name} - Mensaje ${index + 1}`,
+              html: `<p>Este es un mensaje de prueba del experimento "${experiment.name}".<br/>Mensaje #${index + 1} de ${experiment.totalMessages}</p>`,
             });
 
             if (emailResult.success && emailResult.messageId) {
@@ -177,33 +184,51 @@ export class ExperimentsRunnerService {
               result = { success: false };
             }
           } else if (channel === NotificationChannel.TELEGRAM) {
-            // Para Telegram, necesitaríamos un chatId de prueba
-            // Por ahora, simular
-            await new Promise((resolve) =>
-              setTimeout(resolve, 50 + Math.random() * 100),
+            // Obtener chatId de prueba desde variables de entorno
+            const experimentChatId = this.configService.get<string>(
+              'EXPERIMENT_TELEGRAM_CHAT_ID',
             );
-            const success = Math.random() > 0.05;
-            const latencyMs = 50 + Math.random() * 200;
 
-            if (success) {
-              await this.metricsRecorder.updateToAcked({
-                correlationId,
-                status: MetricStatus.ACKED,
-                providerAckAt: new Date(),
-                latencyMs,
-              });
-              result = {
-                success: true,
-                messageId: `telegram-${index}`,
-                latencyMs,
-              };
-            } else {
+            if (!experimentChatId) {
+              this.logger.warn(
+                'EXPERIMENT_TELEGRAM_CHAT_ID no configurado, no se puede enviar mensaje real',
+              );
               await this.metricsRecorder.updateToFailed(
                 correlationId,
-                'TELEGRAM_ERROR',
-                'Simulated error',
+                'TELEGRAM_CONFIG_ERROR',
+                'EXPERIMENT_TELEGRAM_CHAT_ID no configurado',
               );
               result = { success: false };
+            } else {
+              const message = `🧪 <b>Test ${experiment.name}</b>\n\nEste es un mensaje de prueba del experimento.\nMensaje #${index + 1} de ${experiment.totalMessages}`;
+
+              const telegramResult = await this.telegramService.sendMessage(
+                experimentChatId,
+                message,
+              );
+
+              if (telegramResult.success && telegramResult.messageId) {
+                const providerAckAt = new Date();
+                const latencyMs = providerAckAt.getTime() - sentAt.getTime();
+                await this.metricsRecorder.updateToAcked({
+                  correlationId,
+                  status: MetricStatus.ACKED,
+                  providerAckAt,
+                  latencyMs,
+                });
+                result = {
+                  success: true,
+                  messageId: String(telegramResult.messageId),
+                  latencyMs,
+                };
+              } else {
+                await this.metricsRecorder.updateToFailed(
+                  correlationId,
+                  'TELEGRAM_SEND_ERROR',
+                  'Error al enviar mensaje a Telegram',
+                );
+                result = { success: false };
+              }
             }
           }
         }

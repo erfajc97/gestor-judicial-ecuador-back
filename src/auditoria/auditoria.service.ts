@@ -158,31 +158,31 @@ export class AuditoriaService {
     const noResueltos =
       (await // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
       (this.prisma as any).auditoria.count({
-        where: { resuelto: false },
+      where: { resuelto: false },
       })) as number;
     const resueltos =
       (await // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
       (this.prisma as any).auditoria.count({
-        where: { resuelto: true },
+      where: { resuelto: true },
       })) as number;
 
     // Obtener conteo por tipo de error
     const porTipo =
       (await // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
       (this.prisma as any).auditoria.groupBy({
-        by: ['tipoError'],
-        _count: {
-          tipoError: true,
-        },
+      by: ['tipoError'],
+      _count: {
+        tipoError: true,
+      },
       })) as Array<{ tipoError: TipoError; _count: { tipoError: number } }>;
 
     const porEntidad =
       (await // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
       (this.prisma as any).auditoria.groupBy({
-        by: ['entidad'],
-        _count: {
-          entidad: true,
-        },
+      by: ['entidad'],
+      _count: {
+        entidad: true,
+      },
       })) as Array<{ entidad: string; _count: { entidad: number } }>;
 
     return {
@@ -190,12 +190,12 @@ export class AuditoriaService {
       noResueltos,
       resueltos,
       porTipo: porTipo.map((item) => ({
-        tipoError: item.tipoError,
-        cantidad: item._count.tipoError,
+          tipoError: item.tipoError,
+          cantidad: item._count.tipoError,
       })),
       porEntidad: porEntidad.map((item) => ({
-        entidad: item.entidad,
-        cantidad: item._count.entidad,
+          entidad: item.entidad,
+          cantidad: item._count.entidad,
       })),
     };
   }
