@@ -199,7 +199,7 @@ export class ExperimentsService {
     try {
       // Eliminar metricEvents relacionados
       // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
-      await (this.prisma as any).metricEvent.deleteMany({
+      await (this.prisma as any).notificationMetricEvent.deleteMany({
         where: { experimentRunId: id },
       });
 

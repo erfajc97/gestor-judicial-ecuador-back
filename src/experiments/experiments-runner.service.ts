@@ -132,7 +132,7 @@ export class ExperimentsRunnerService {
       const delayBetweenBatches = 1000 / ratePerSec; // ms entre mensajes
 
       this.logger.log(
-        `Iniciando experimento ${experiment.id}: ${experiment.totalMessages} mensajes, concurrencia ${experiment.concurrency}, rate ${ratePerSec}/s, dryRun=${dryRun}`,
+        `Iniciando experimento ${experiment.id}: ${experiment.totalMessages} mensajes, concurrencia ${experiment.concurrency}, rate ${ratePerSec}/s, dryRun=${dryRun}, channelTarget=${experiment.channelTarget}`,
       );
 
       // Configurar timeout para evitar que el experimento se cuelgue
@@ -449,9 +449,10 @@ export class ExperimentsRunnerService {
             }
           } else {
             // Lógica para EMAIL o TELEGRAM individual
-            const channel = this.getChannelForTarget(
-              experiment.channelTarget,
-              index,
+            // Asegurar que solo se use el canal seleccionado, sin alternar
+            const channel = experiment.channelTarget; // Usar directamente el channelTarget, sin alternar
+            this.logger.debug(
+              `[${experiment.channelTarget}] Preparando mensaje ${index + 1}: usando canal ${channel}`,
             );
             const correlationId = await this.metricsRecorder.recordPendingEvent(
               {
@@ -541,21 +542,31 @@ export class ExperimentsRunnerService {
                 failCount++;
               }
             } else {
-              // Envío real - usar el canal determinado por getChannelForTarget
+              // Envío real - usar el canal seleccionado directamente
               if (channel === NotificationChannel.EMAIL) {
+                this.logger.log(
+                  `[EMAIL] Enviando mensaje ${index + 1} por EMAIL únicamente`,
+                );
                 result = await sendEmailMessage(index, correlationId, sentAt);
               } else if (channel === NotificationChannel.TELEGRAM) {
+                this.logger.log(
+                  `[TELEGRAM] Enviando mensaje ${index + 1} por TELEGRAM únicamente`,
+                );
                 result = await sendTelegramMessage(
                   index,
                   correlationId,
                   sentAt,
                 );
               } else {
-                // Canal no reconocido
+                // Canal no reconocido (esto no debería pasar, pero lo manejamos por seguridad)
+                const errorMsg = `Canal desconocido: ${String(channel)}`;
+                this.logger.error(
+                  `[ERROR] ${errorMsg} en mensaje ${index + 1}`,
+                );
                 await this.metricsRecorder.updateToFailed(
                   correlationId,
                   'UNKNOWN_CHANNEL',
-                  `Canal desconocido: ${channel}`,
+                  errorMsg,
                 );
                 result = { success: false };
               }
